@@ -9,7 +9,6 @@ struct BacklogItem: Decodable, Identifiable, Sendable {
     let closeNote: String?
     let prs: [PR]
     let commentCount: Int
-    let messageCount: Int
 
     struct PR: Decodable, Identifiable, Sendable {
         let id: Int64
@@ -125,8 +124,8 @@ struct BacklogRow: View {
                     if !item.prs.isEmpty {
                         count(item.prs.count, systemImage: "arrow.triangle.pull")
                     }
-                    if item.commentCount + item.messageCount > 0 {
-                        count(item.commentCount + item.messageCount, systemImage: "bubble")
+                    if item.commentCount > 0 {
+                        count(item.commentCount, systemImage: "bubble")
                     }
                 }
                 .font(.caption)
@@ -154,7 +153,6 @@ struct ItemDetailView: View {
 
     @State private var item: BacklogItem?
     @State private var comments: [Comment] = []
-    @State private var messages: [Message] = []
 
     var body: some View {
         List {
@@ -201,20 +199,18 @@ struct ItemDetailView: View {
                         }
                     }
                 }
-                if !messages.isEmpty {
-                    Section("Chat") {
-                        ForEach(messages) { m in
-                            MessageRow(message: m, author: people[m.authorId])
-                        }
-                    }
-                }
             }
         }
         .listStyle(.insetGrouped)
         .overlay { if item == nil { ProgressView() } }
         .navigationTitle("#\(itemID)")
         .navigationBarTitleDisplayMode(.inline)
-        .task(id: "\(app.revision("backlog"))-\(app.revision("pr"))-\(app.revision("comment"))-\(app.revision("message"))") {
+        .safeAreaInset(edge: .bottom) {
+            if item != nil {
+                Composer(placeholder: "Add a comment") { await addComment($0) }
+            }
+        }
+        .task(id: "\(app.revision("backlog"))-\(app.revision("pr"))-\(app.revision("comment"))") {
             await load()
         }
     }
@@ -228,15 +224,33 @@ struct ItemDetailView: View {
         do {
             async let i: BacklogItem = app.api.get(base, token: token)
             async let c: [Comment] = app.api.get(base + "/comments", token: token)
-            async let m: [Message] = app.api.get(base + "/messages", token: token)
-            (item, comments, messages) = try await (i, c, m)
-            log.info("item \(itemID): \(item?.prs.count ?? 0) PRs, \(comments.count) comments, \(messages.count) messages")
+            (item, comments) = try await (i, c)
+            log.info("item \(itemID): \(item?.prs.count ?? 0) PRs, \(comments.count) comments")
         } catch {
             app.handle(error)
+        }
+    }
+
+    private func addComment(_ body: String) async -> Bool {
+        guard let token = app.token, let ws = app.selected else { return false }
+        do {
+            let c: Comment = try await app.api.post("api/workspaces/\(ws.id)/backlog/\(itemID)/comments", token: token,
+                                                    body: NewComment(body: body))
+            if !comments.contains(where: { $0.id == c.id }) {
+                comments.append(c)
+            }
+            return true
+        } catch {
+            app.handle(error)
+            return false
         }
     }
 
     private func markdown(_ s: String) -> AttributedString {
         (try? AttributedString(markdown: s, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(s)
     }
+}
+
+struct NewComment: Encodable, Sendable {
+    let body: String
 }
