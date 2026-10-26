@@ -199,6 +199,10 @@ final class AppModel {
 
     /// Shows the error; a 401 means the session is gone, so sign out.
     func handle(_ error: Error) {
+        // A restarted `.task` cancels its request; that's not an error.
+        if error is CancellationError || (error as? URLError)?.code == .cancelled {
+            return
+        }
         if let e = error as? APIError, e.status == 401 {
             clearSession()
             self.error = "You were signed out. Sign in again."
