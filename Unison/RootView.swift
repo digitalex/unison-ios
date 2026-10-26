@@ -78,8 +78,10 @@ struct MainView: View {
         }
         .task { await model.load() }
         // Follow live events while the app is in the foreground.
-        .task(id: scenePhase == .active ? model.selectedID : nil) {
-            if scenePhase == .active { await model.followEvents() }
+        // Keyed on the joined participant: the stream needs the workspace
+        // list loaded and joined, which happens after launch.
+        .task(id: scenePhase == .active ? model.participant?.id : nil) {
+            if scenePhase == .active, model.participant != nil { await model.followEvents() }
         }
     }
 

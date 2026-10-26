@@ -1,7 +1,10 @@
 import AuthenticationServices
 import Foundation
 import Observation
+import OSLog
 import UIKit
+
+let log = Logger(subsystem: "com.digitalex.Unison", category: "app")
 
 /// The app's state: the session, the user's workspaces and the selected one.
 @MainActor
@@ -154,15 +157,18 @@ final class AppModel {
         guard let token, let ws = selected else { return }
         var backoff: Duration = .seconds(1)
         while !Task.isCancelled {
+            log.info("stream: connecting to \(ws.id, privacy: .public)")
             do {
                 try await api.followEvents(workspace: ws.id, token: token) { event in
                     backoff = .seconds(1)
                     let kind = String(event.type.prefix { $0 != "." })
+                    log.info("stream: \(event.type, privacy: .public)")
                     revisions[kind, default: 0] += 1
                 }
             } catch is CancellationError {
                 return
             } catch {
+                log.error("stream: \(error.localizedDescription, privacy: .public)")
                 if let e = error as? APIError, e.status == 401 {
                     handle(e)
                     return

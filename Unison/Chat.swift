@@ -45,6 +45,7 @@ final class ChatModel {
 struct ChatView: View {
     @Environment(AppModel.self) private var app
     @State private var chat = ChatModel()
+    @State private var position = ScrollPosition(edge: .bottom)
 
     var body: some View {
         Group {
@@ -72,7 +73,11 @@ struct ChatView: View {
                     .padding()
                 }
                 .defaultScrollAnchor(.bottom)
+                .scrollPosition($position)
             }
+        }
+        .onChange(of: chat.messages.last?.id) {
+            withAnimation { position.scrollTo(edge: .bottom) }
         }
         .safeAreaInset(edge: .bottom) {
             Composer(placeholder: "Message") { await chat.send($0, parent: nil, app: app) }
