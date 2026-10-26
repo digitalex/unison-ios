@@ -25,6 +25,10 @@ struct API: Sendable {
         try await send("POST", path, token: token, body: body)
     }
 
+    func delete<T: Decodable>(_ path: String, token: String?) async throws -> T {
+        try await send("DELETE", path, token: token, body: Optional<Empty>.none)
+    }
+
     /// Follows the workspace's Server-Sent Events stream, calling `onEvent`
     /// for each event until the connection ends or the task is cancelled.
     @MainActor
@@ -123,6 +127,8 @@ struct Message: Decodable, Identifiable, Sendable {
     let createdAt: Int64
     let item: Item?
     let reactions: [Reaction]?
+    /// Set when the message asks the members it @mentions to act.
+    var actionRequired: Bool? = nil
 
     struct Item: Decodable, Sendable {
         let id: Int64
@@ -135,12 +141,14 @@ struct Message: Decodable, Identifiable, Sendable {
         let count: Int
     }
 
-    var date: Date { Date(timeIntervalSince1970: TimeInterval(createdAt) / 1000) }
+    /// When it was sent, never in the future (the server's clock may be ahead).
+    var date: Date { min(Date(timeIntervalSince1970: TimeInterval(createdAt) / 1000), .now) }
 }
 
 struct NewMessage: Encodable, Sendable {
     let body: String
     let parentId: Int64?
+    var actionRequired: Bool? = nil
 }
 
 /// An event from the workspace stream; only its type matters to the app.

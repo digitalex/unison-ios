@@ -207,7 +207,7 @@ struct ItemDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .safeAreaInset(edge: .bottom) {
             if item != nil {
-                Composer(placeholder: "Add a comment") { await addComment($0) }
+                Composer(placeholder: "Add a comment") { body, _ in await addComment(body) }
             }
         }
         .task(id: "\(app.revision("backlog"))-\(app.revision("pr"))-\(app.revision("comment"))") {

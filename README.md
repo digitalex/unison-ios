@@ -17,3 +17,10 @@ Debug builds talk to `https://unison.cloud.run` unless the scheme sets
 The app uses the same device flow as `unison login`. It opens the approval
 page in a browser sheet, where you sign in with GitHub and confirm the code.
 Meanwhile the app polls for the session token and stores it in the Keychain.
+
+## Testing against a local server
+
+Run a server in open mode (`UNISON_AUTH=off unison serve`), join with a
+participant via the API, and launch a debug build with `UNISON_SERVER`,
+`UNISON_TOKEN` (the participant token) and `UNISON_WORKSPACE`. This skips
+GitHub sign-in. `UNISON_TAB` and `UNISON_ITEM` open a tab or a backlog item.
