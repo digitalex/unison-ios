@@ -1,7 +1,10 @@
 import AuthenticationServices
 import Foundation
 import Observation
+import OSLog
 import UIKit
+
+let log = Logger(subsystem: "com.digitalex.Unison", category: "app")
 
 /// The app's state: the session, the user's workspaces and the selected one.
 @MainActor
@@ -13,6 +16,9 @@ final class AppModel {
     /// The code shown while the user approves the sign-in in the browser.
     private(set) var pendingCode: String?
     var error: String?
+    /// Bumped per event kind ("message", "inbox", …) as the stream delivers
+    /// events, so screens can refetch with `.task(id: model.revision(…))`.
+    private(set) var revisions: [String: Int] = [:]
 
     var selectedID: Workspace.ID? {
         didSet { UserDefaults.standard.set(selectedID, forKey: "workspace") }
@@ -139,6 +145,40 @@ final class AppModel {
         guard let token, let ws = selected else { return }
         let res: JoinResponse = try await api.post("api/workspaces/\(ws.id)/join", token: token)
         participant = res.participant
+    }
+
+    // MARK: Live updates
+
+    func revision(_ kind: String) -> Int { revisions[kind, default: 0] }
+
+    /// Follows the selected workspace's event stream until cancelled,
+    /// reconnecting with backoff. Each event bumps its kind's revision.
+    func followEvents() async {
+        guard let token, let ws = selected else { return }
+        var backoff: Duration = .seconds(1)
+        while !Task.isCancelled {
+            log.info("stream: connecting to \(ws.id, privacy: .public)")
+            do {
+                try await api.followEvents(workspace: ws.id, token: token) { event in
+                    backoff = .seconds(1)
+                    let kind = String(event.type.prefix { $0 != "." })
+                    log.info("stream: \(event.type, privacy: .public)")
+                    revisions[kind, default: 0] += 1
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                log.error("stream: \(error.localizedDescription, privacy: .public)")
+                if let e = error as? APIError, e.status == 401 {
+                    handle(e)
+                    return
+                }
+            }
+            try? await Task.sleep(for: backoff)
+            backoff = min(backoff * 2, .seconds(30))
+            // Catch up on anything missed while disconnected.
+            for kind in revisions.keys { revisions[kind, default: 0] += 1 }
+        }
     }
 
     // MARK: Sign out

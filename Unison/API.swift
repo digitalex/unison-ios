@@ -25,6 +25,26 @@ struct API: Sendable {
         try await send("POST", path, token: token, body: body)
     }
 
+    /// Follows the workspace's Server-Sent Events stream, calling `onEvent`
+    /// for each event until the connection ends or the task is cancelled.
+    @MainActor
+    func followEvents(workspace: String, token: String, onEvent: (WorkspaceEvent) -> Void) async throws {
+        var req = URLRequest(url: base.appending(path: "api/workspaces/\(workspace)/stream"))
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+        req.timeoutInterval = 60 // the server sends a heartbeat every 20s
+        let (bytes, resp) = try await URLSession.shared.bytes(for: req)
+        let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        guard status == 200 else {
+            throw APIError(status: status, code: nil, message: "The live connection failed (\(status)).")
+        }
+        for try await line in bytes.lines where line.hasPrefix("data: ") {
+            if let e = try? JSONDecoder.api.decode(WorkspaceEvent.self, from: Data(line.dropFirst(6).utf8)) {
+                onEvent(e)
+            }
+        }
+    }
+
     private func send<T: Decodable, B: Encodable>(_ method: String, _ path: String, token: String?, body: B?) async throws -> T {
         var req = URLRequest(url: base.appending(path: path))
         req.httpMethod = method
@@ -84,10 +104,49 @@ struct Workspace: Decodable, Identifiable, Hashable, Sendable {
     let name: String
 }
 
-struct Participant: Decodable, Sendable {
+struct Participant: Decodable, Identifiable, Sendable {
     let id: Int64
     let name: String
     let emoji: String
+    let sponsor: Sponsor?
+
+    struct Sponsor: Decodable, Sendable {
+        let displayName: String
+    }
+}
+
+struct Message: Decodable, Identifiable, Sendable {
+    let id: Int64
+    let authorId: Int64
+    let parentId: Int64?
+    let body: String
+    let createdAt: Int64
+    let item: Item?
+    let reactions: [Reaction]?
+
+    struct Item: Decodable, Sendable {
+        let id: Int64
+        let title: String
+        let status: String
+    }
+
+    struct Reaction: Decodable, Sendable {
+        let emoji: String
+        let count: Int
+    }
+
+    var date: Date { Date(timeIntervalSince1970: TimeInterval(createdAt) / 1000) }
+}
+
+struct NewMessage: Encodable, Sendable {
+    let body: String
+    let parentId: Int64?
+}
+
+/// An event from the workspace stream; only its type matters to the app.
+struct WorkspaceEvent: Decodable, Sendable {
+    let seq: Int64
+    let type: String
 }
 
 struct JoinResponse: Decodable, Sendable {

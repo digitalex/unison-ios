@@ -1,0 +1,204 @@
+import SwiftUI
+
+/// The Chat tab's data: the workspace's messages and who wrote them.
+@MainActor
+@Observable
+final class ChatModel {
+    private(set) var messages: [Message] = []
+    private(set) var people: [Int64: Participant] = [:]
+    private(set) var loaded = false
+
+    func load(_ app: AppModel) async {
+        guard let token = app.token, let ws = app.selected else { return }
+        do {
+            async let msgs: [Message] = app.api.get("api/workspaces/\(ws.id)/messages", token: token)
+            async let ppl: [Participant] = app.api.get("api/workspaces/\(ws.id)/participants", token: token)
+            let (m, p) = try await (msgs, ppl)
+            messages = m
+            people = Dictionary(p.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+            loaded = true
+        } catch {
+            app.handle(error)
+        }
+    }
+
+    func send(_ body: String, parent: Int64?, app: AppModel) async -> Bool {
+        guard let token = app.token, let ws = app.selected else { return false }
+        do {
+            let m: Message = try await app.api.post("api/workspaces/\(ws.id)/messages", token: token,
+                                                    body: NewMessage(body: body, parentId: parent))
+            if !messages.contains(where: { $0.id == m.id }) {
+                messages.append(m)
+            }
+            return true
+        } catch {
+            app.handle(error)
+            return false
+        }
+    }
+
+    var topLevel: [Message] { messages.filter { $0.parentId == nil } }
+
+    func replies(to id: Int64) -> [Message] { messages.filter { $0.parentId == id } }
+}
+
+struct ChatView: View {
+    @Environment(AppModel.self) private var app
+    @State private var chat = ChatModel()
+    @State private var position = ScrollPosition(edge: .bottom)
+
+    var body: some View {
+        Group {
+            if !chat.loaded {
+                ProgressView()
+            } else if chat.topLevel.isEmpty {
+                ContentUnavailableView("No messages yet", systemImage: "bubble.left.and.bubble.right",
+                                       description: Text("Say hello to your team."))
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 16) {
+                        ForEach(chat.topLevel) { m in
+                            VStack(alignment: .leading, spacing: 6) {
+                                MessageRow(message: m, author: chat.people[m.authorId])
+                                let replies = chat.replies(to: m.id)
+                                NavigationLink(value: m.id) {
+                                    Label(replies.isEmpty ? "Reply" : replies.count == 1 ? "1 reply" : "\(replies.count) replies",
+                                          systemImage: "arrowshape.turn.up.left")
+                                        .font(.footnote.weight(.medium))
+                                }
+                                .padding(.leading, 44)
+                            }
+                        }
+                    }
+                    .padding()
+                }
+                .defaultScrollAnchor(.bottom)
+                .scrollPosition($position)
+            }
+        }
+        .onChange(of: chat.messages.last?.id) {
+            withAnimation { position.scrollTo(edge: .bottom) }
+        }
+        .safeAreaInset(edge: .bottom) {
+            Composer(placeholder: "Message") { await chat.send($0, parent: nil, app: app) }
+        }
+        .navigationDestination(for: Int64.self) { id in
+            ThreadView(chat: chat, parentID: id)
+        }
+        .task(id: "\(app.selectedID ?? "")-\(app.revision("message"))-\(app.revision("participant"))") {
+            await chat.load(app)
+        }
+    }
+}
+
+struct ThreadView: View {
+    @Environment(AppModel.self) private var app
+    let chat: ChatModel
+    let parentID: Int64
+
+    var body: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 16) {
+                if let parent = chat.messages.first(where: { $0.id == parentID }) {
+                    MessageRow(message: parent, author: chat.people[parent.authorId])
+                    Divider()
+                }
+                ForEach(chat.replies(to: parentID)) { m in
+                    MessageRow(message: m, author: chat.people[m.authorId])
+                }
+            }
+            .padding()
+        }
+        .defaultScrollAnchor(.bottom)
+        .navigationTitle("Thread")
+        .navigationBarTitleDisplayMode(.inline)
+        .safeAreaInset(edge: .bottom) {
+            Composer(placeholder: "Reply") { await chat.send($0, parent: parentID, app: app) }
+        }
+    }
+}
+
+struct MessageRow: View {
+    let message: Message
+    let author: Participant?
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Text(author?.emoji ?? "👤")
+                .font(.title3)
+                .frame(width: 34, height: 34)
+                .background(.fill.tertiary, in: Circle())
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(author?.name ?? "Someone").font(.subheadline.weight(.semibold))
+                    if let sponsor = author?.sponsor {
+                        Text("agent of \(sponsor.displayName)").font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 0)
+                    Text(message.date, format: .relative(presentation: .numeric, unitsStyle: .narrow))
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+                if let item = message.item {
+                    Text("#\(item.id) \(item.title)")
+                        .font(.caption.weight(.medium))
+                        .lineLimit(1)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 2)
+                        .background(.tint.opacity(0.12), in: Capsule())
+                        .foregroundStyle(.tint)
+                }
+                Text(markdown(message.body))
+                    .font(.body)
+                    .textSelection(.enabled)
+                if let reactions = message.reactions, !reactions.isEmpty {
+                    HStack(spacing: 6) {
+                        ForEach(reactions, id: \.emoji) { r in
+                            Text("\(r.emoji) \(r.count)")
+                                .font(.caption)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(.fill.tertiary, in: Capsule())
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func markdown(_ s: String) -> AttributedString {
+        (try? AttributedString(markdown: s, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(s)
+    }
+}
+
+/// A growing text field with a send button, pinned to the bottom.
+struct Composer: View {
+    let placeholder: String
+    let send: (String) async -> Bool
+    @State private var text = ""
+    @State private var sending = false
+
+    var body: some View {
+        HStack(alignment: .bottom, spacing: 8) {
+            TextField(placeholder, text: $text, axis: .vertical)
+                .lineLimit(1...6)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 9)
+                .background(.fill.tertiary, in: RoundedRectangle(cornerRadius: 20))
+            Button {
+                let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                sending = true
+                Task {
+                    if await send(body) { text = "" }
+                    sending = false
+                }
+            } label: {
+                Image(systemName: "arrow.up.circle.fill").font(.system(size: 32))
+            }
+            .disabled(sending || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 8)
+        .background(.bar)
+    }
+}

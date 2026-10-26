@@ -67,27 +67,36 @@ struct MainView: View {
     var body: some View {
         TabView {
             Tab("Chat", systemImage: "bubble.left.and.bubble.right") {
-                screen("Chat", systemImage: "bubble.left.and.bubble.right")
+                screen("Chat") { ChatView() }
             }
             Tab("Inbox", systemImage: "tray") {
-                screen("Inbox", systemImage: "tray")
+                screen("Inbox") { notBuilt("Inbox", systemImage: "tray") }
             }
             Tab("Backlog", systemImage: "list.number") {
-                screen("Backlog", systemImage: "list.number")
+                screen("Backlog") { notBuilt("Backlog", systemImage: "list.number") }
             }
         }
         .task { await model.load() }
+        // Follow live events while the app is in the foreground.
+        // Keyed on the joined participant: the stream needs the workspace
+        // list loaded and joined, which happens after launch.
+        .task(id: scenePhase == .active ? model.participant?.id : nil) {
+            if scenePhase == .active, model.participant != nil { await model.followEvents() }
+        }
     }
 
-    private func screen(_ title: String, systemImage: String) -> some View {
+    @Environment(\.scenePhase) private var scenePhase
+
+    private func screen(_ title: String, @ViewBuilder content: () -> some View) -> some View {
         NavigationStack {
             Group {
                 if model.workspaces.isEmpty {
                     ContentUnavailableView("No workspaces", systemImage: "square.dashed",
                                            description: Text("Join a workspace on the web, then come back."))
+                } else if model.participant == nil {
+                    ProgressView()
                 } else {
-                    ContentUnavailableView(title, systemImage: systemImage,
-                                           description: Text("Not built yet."))
+                    content()
                 }
             }
             .navigationTitle(model.selected?.name ?? title)
@@ -95,6 +104,10 @@ struct MainView: View {
             .toolbar { WorkspaceMenu() }
         }
     }
+}
+
+private func notBuilt(_ title: String, systemImage: String) -> some View {
+    ContentUnavailableView(title, systemImage: systemImage, description: Text("Not built yet."))
 }
 
 /// The workspace switcher and sign-out, in every tab's navigation bar.
