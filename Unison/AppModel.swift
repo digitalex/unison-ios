@@ -1,6 +1,7 @@
 import AuthenticationServices
 import Foundation
 import Observation
+import UserNotifications
 import OSLog
 import UIKit
 
@@ -16,6 +17,9 @@ final class AppModel {
     /// The code shown while the user approves the sign-in in the browser.
     private(set) var pendingCode: String?
     var error: String?
+    /// Where a tapped notification or a link asks to go; the tab view
+    /// follows it and clears it.
+    var route: Route?
     /// Bumped per event kind ("message", "inbox", …) as the stream delivers
     /// events, so screens can refetch with `.task(id: model.revision(…))`.
     private(set) var revisions: [String: Int] = [:]
@@ -192,6 +196,40 @@ final class AppModel {
             backoff = min(backoff * 2, .seconds(30))
             // Catch up on anything missed while disconnected.
             for kind in revisions.keys { revisions[kind, default: 0] += 1 }
+        }
+    }
+
+    // MARK: Push notifications
+
+    /// Registers for remote notifications (the delegate then posts the device
+    /// token with `registerDevice`) and asks for permission to show them.
+    /// Registering doesn't need the permission, so the server knows the device
+    /// either way; iOS only shows pushes once the user allows them.
+    func enablePush() async {
+        guard token?.hasPrefix("us_") == true else { return } // devices belong to accounts
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["UNISON_NO_PUSH"] != nil { return } // no prompt over screenshots
+        #endif
+        UIApplication.shared.registerForRemoteNotifications()
+        do {
+            let granted = try await UNUserNotificationCenter.current()
+                .requestAuthorization(options: [.alert, .sound, .badge])
+            log.info("push: permission \(granted ? "granted" : "denied", privacy: .public)")
+        } catch {
+            log.error("push: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// Registers this device's APNs token with the account (`POST /api/me/devices`).
+    /// Signing out removes it on the server.
+    func registerDevice(_ apnsToken: String) async {
+        guard let token, token.hasPrefix("us_") else { return }
+        do {
+            let _: Device = try await api.post("api/me/devices", token: token,
+                                               body: NewDevice(apnsToken: apnsToken, label: "iPhone"))
+            log.info("push: device registered")
+        } catch {
+            log.error("push: device registration failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 

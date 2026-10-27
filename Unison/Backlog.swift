@@ -62,14 +62,6 @@ final class BacklogModel {
 struct BacklogView: View {
     @Environment(AppModel.self) private var app
     @State private var backlog = BacklogModel()
-    /// Debug builds can open an item with `UNISON_ITEM`, for screenshots.
-    @State private var debugItem: Int64? = {
-        #if DEBUG
-        return ProcessInfo.processInfo.environment["UNISON_ITEM"].flatMap { Int64($0) }
-        #else
-        return nil
-        #endif
-    }()
 
     var body: some View {
         @Bindable var backlog = backlog
@@ -97,9 +89,7 @@ struct BacklogView: View {
         .navigationDestination(for: Int64.self) { id in
             ItemDetailView(itemID: id, backlog: backlog)
         }
-        .navigationDestination(item: $debugItem) { id in
-            ItemDetailView(itemID: id, backlog: backlog)
-        }
+
         .task(id: "\(app.selectedID ?? "")-\(backlog.filter)-\(app.revision("backlog"))-\(app.revision("pr"))-\(app.revision("comment"))") {
             await backlog.load(app)
         }

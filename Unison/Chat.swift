@@ -115,6 +115,8 @@ struct ThreadView: View {
         .defaultScrollAnchor(.bottom)
         .navigationTitle("Thread")
         .navigationBarTitleDisplayMode(.inline)
+        // Opened straight from a notification, the chat may not be loaded yet.
+        .task { if !chat.loaded { await chat.load(app) } }
         .safeAreaInset(edge: .bottom) {
             Composer(placeholder: "Reply") { body, _ in await chat.send(body, parent: parentID, app: app) }
         }

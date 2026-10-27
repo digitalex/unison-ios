@@ -65,8 +65,11 @@ struct MainView: View {
     @Environment(AppModel.self) private var model
     @State private var actions = ActionsModel()
     @State private var tab = MainView.initialTab
+    @State private var chatPath: [Int64] = []
+    @State private var backlogPath: [Int64] = MainView.initialItem
 
-    /// Debug builds can open on a tab with `UNISON_TAB` (chat, backlog).
+    /// Debug builds can open on a tab with `UNISON_TAB` (chat, backlog),
+    /// and on a backlog item with `UNISON_ITEM`, for screenshots.
     private static var initialTab: String {
         #if DEBUG
         return ProcessInfo.processInfo.environment["UNISON_TAB"] ?? "chat"
@@ -75,17 +78,33 @@ struct MainView: View {
         #endif
     }
 
+    private static var initialItem: [Int64] {
+        #if DEBUG
+        return ProcessInfo.processInfo.environment["UNISON_ITEM"].flatMap { Int64($0) }.map { [$0] } ?? []
+        #else
+        return []
+        #endif
+    }
+
     var body: some View {
         TabView(selection: $tab) {
             Tab("Chat", systemImage: "bubble.left.and.bubble.right", value: "chat") {
-                screen("Chat") { ChatView(actions: actions) }
+                screen("Chat", path: $chatPath) { ChatView(actions: actions) }
             }
             .badge(actions.count)
             Tab("Backlog", systemImage: "list.number", value: "backlog") {
-                screen("Backlog") { BacklogView() }
+                screen("Backlog", path: $backlogPath) { BacklogView() }
             }
         }
-        .task { await model.load() }
+        .task {
+            await model.load()
+            await model.enablePush()
+        }
+        // Follow a tapped notification or a link, once the workspaces are loaded.
+        .task(id: RouteTrigger(route: model.route, ready: model.participant != nil)) {
+            guard let route = model.route, model.participant != nil else { return }
+            await follow(route)
+        }
         .task(id: "\(model.participant?.id ?? 0)-\(model.revision("message"))") {
             if model.participant != nil { await actions.load(model) }
         }
@@ -99,8 +118,23 @@ struct MainView: View {
 
     @Environment(\.scenePhase) private var scenePhase
 
-    private func screen(_ title: String, @ViewBuilder content: () -> some View) -> some View {
-        NavigationStack {
+    private func follow(_ route: Route) async {
+        model.route = nil
+        if let ws = route.workspaceID, ws != model.selectedID, model.workspaces.contains(where: { $0.id == ws }) {
+            await model.select(ws)
+        }
+        if let thread = route.thread {
+            tab = "chat"
+            chatPath = [thread]
+        } else if let item = route.itemID {
+            tab = "backlog"
+            backlogPath = [item]
+        }
+        log.info("route: opened \(tab, privacy: .public) \(route.thread ?? route.itemID ?? 0)")
+    }
+
+    private func screen(_ title: String, path: Binding<[Int64]>, @ViewBuilder content: () -> some View) -> some View {
+        NavigationStack(path: path) {
             Group {
                 if model.workspaces.isEmpty {
                     ContentUnavailableView("No workspaces", systemImage: "square.dashed",
@@ -116,6 +150,11 @@ struct MainView: View {
             .toolbar { WorkspaceMenu() }
         }
     }
+}
+
+private struct RouteTrigger: Equatable {
+    let route: Route?
+    let ready: Bool
 }
 
 /// The workspace switcher and sign-out, in every tab's navigation bar.

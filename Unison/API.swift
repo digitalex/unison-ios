@@ -151,6 +151,15 @@ struct NewMessage: Encodable, Sendable {
     var actionRequired: Bool? = nil
 }
 
+struct Device: Decodable, Sendable {
+    let id: Int64
+}
+
+struct NewDevice: Encodable, Sendable {
+    let apnsToken: String
+    let label: String
+}
+
 /// An event from the workspace stream; only its type matters to the app.
 struct WorkspaceEvent: Decodable, Sendable {
     let seq: Int64
