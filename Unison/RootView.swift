@@ -19,6 +19,7 @@ struct RootView: View {
         } message: {
             Text(model.error ?? "")
         }
+        .preferredColorScheme(.dark)
     }
 }
 
@@ -70,8 +71,9 @@ struct MainView: View {
     @State private var tab = MainView.initialTab
     @State private var chatPath: [Int64] = []
     @State private var backlogPath: [Int64] = MainView.initialItem
+    @State private var settingsPath: [Int64] = []
 
-    /// Debug builds can open on a tab with `UNISON_TAB` (chat, backlog),
+    /// Debug builds can open on a tab with `UNISON_TAB` (chat, backlog, settings),
     /// and on a backlog item with `UNISON_ITEM`, for screenshots.
     private static var initialTab: String {
         #if DEBUG
@@ -97,6 +99,9 @@ struct MainView: View {
             .badge(actions.count)
             Tab("Backlog", systemImage: "list.number", value: "backlog") {
                 screen("Backlog", path: $backlogPath) { BacklogView() }
+            }
+            Tab("Settings", systemImage: "gearshape", value: "settings") {
+                screen("Settings", path: $settingsPath) { SettingsView() }
             }
         }
         .task {
@@ -148,9 +153,16 @@ struct MainView: View {
                     content()
                 }
             }
-            .navigationTitle(model.selected?.name ?? title)
+            // One opaque row: the tab's title on the left, the workspace on the right.
+            .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { WorkspaceMenu() }
+            .toolbar(removing: .title)
+            .toolbar {
+                TitleItem(title: title)
+                WorkspaceMenu()
+            }
+            .toolbarBackground(Color(white: 0.07), for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
         }
     }
 }
@@ -160,31 +172,56 @@ private struct RouteTrigger: Equatable {
     let ready: Bool
 }
 
-/// The workspace switcher and sign-out, in every tab's navigation bar.
+/// The tab's title, at the top left, without the iOS 26 glass bubble.
+private struct TitleItem: ToolbarContent {
+    let title: String
+
+    var body: some ToolbarContent {
+        if #available(iOS 26, *) {
+            item.sharedBackgroundVisibility(.hidden)
+        } else {
+            item
+        }
+    }
+
+    private var item: some ToolbarContent {
+        ToolbarItem(placement: .topBarLeading) {
+            Text(title).font(.title3.bold()).fixedSize()
+        }
+    }
+}
+
+/// The workspace switcher, at the top right of every tab.
 struct WorkspaceMenu: ToolbarContent {
     @Environment(AppModel.self) private var model
 
     var body: some ToolbarContent {
         ToolbarItem(placement: .topBarTrailing) {
             Menu {
-                if model.workspaces.count > 1 {
-                    Picker("Workspace", selection: Binding(
-                        get: { model.selectedID },
-                        set: { id in if let id { Task { await model.select(id) } } }
-                    )) {
-                        ForEach(model.workspaces) { ws in
-                            Text(ws.name).tag(Optional(ws.id))
-                        }
+                Picker("Your workspaces", selection: Binding(
+                    get: { model.selectedID },
+                    set: { id in if let id { Task { await model.select(id) } } }
+                )) {
+                    ForEach(model.workspaces) { ws in
+                        Text(ws.name).tag(Optional(ws.id))
                     }
                 }
-                if let p = model.participant {
-                    Text("\(p.emoji) \(p.name)")
-                }
-                Button("Sign out", systemImage: "rectangle.portrait.and.arrow.right", role: .destructive) {
-                    Task { await model.signOut() }
-                }
             } label: {
-                Image(systemName: "person.crop.circle")
+                let name = model.selected?.name ?? ""
+                HStack(spacing: 6) {
+                    Text(String(name.prefix(1)).uppercased())
+                        .font(.caption.bold())
+                        .foregroundStyle(.black)
+                        .frame(width: 20, height: 20)
+                        .background(.tint, in: RoundedRectangle(cornerRadius: 6))
+                    Text(name)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                    Image(systemName: "chevron.down")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.secondary)
+                }
+                .fixedSize()
             }
         }
     }
