@@ -106,6 +106,27 @@ extension JSONEncoder {
 struct Workspace: Decodable, Identifiable, Hashable, Sendable {
     let id: String
     let name: String
+    var canvasUrl: String? = nil
+    var repos: [Repo]? = nil
+
+    struct Repo: Decodable, Identifiable, Hashable, Sendable {
+        let id: Int64
+        let url: String
+    }
+}
+
+/// `GET api/me/user`: the signed-in account.
+struct User: Decodable, Sendable {
+    let displayName: String
+    let avatarUrl: String?
+}
+
+struct InviteRequest: Encodable, Sendable {
+    let link = true
+}
+
+struct InviteLink: Decodable, Sendable {
+    let url: String
 }
 
 struct Participant: Decodable, Identifiable, Sendable {
