@@ -34,6 +34,14 @@ final class AppModel {
     init() {
         token = Keychain.read()
         selectedID = UserDefaults.standard.string(forKey: "workspace")
+        #if DEBUG
+        // Testing against a local open-mode server (`UNISON_AUTH=off`) with a
+        // participant token instead of an account session.
+        if let t = ProcessInfo.processInfo.environment["UNISON_TOKEN"] {
+            token = t
+            selectedID = ProcessInfo.processInfo.environment["UNISON_WORKSPACE"] ?? selectedID
+        }
+        #endif
     }
 
     // MARK: Sign in (device flow)
@@ -143,6 +151,12 @@ final class AppModel {
 
     private func join() async throws {
         guard let token, let ws = selected else { return }
+        #if DEBUG
+        if !token.hasPrefix("us_") { // a participant token is already joined
+            participant = try await api.get("api/workspaces/\(ws.id)/me", token: token)
+            return
+        }
+        #endif
         let res: JoinResponse = try await api.post("api/workspaces/\(ws.id)/join", token: token)
         participant = res.participant
     }
@@ -199,6 +213,10 @@ final class AppModel {
 
     /// Shows the error; a 401 means the session is gone, so sign out.
     func handle(_ error: Error) {
+        // A restarted `.task` cancels its request; that's not an error.
+        if error is CancellationError || (error as? URLError)?.code == .cancelled {
+            return
+        }
         if let e = error as? APIError, e.status == 401 {
             clearSession()
             self.error = "You were signed out. Sign in again."

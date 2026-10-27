@@ -63,20 +63,32 @@ struct SignInView: View {
 
 struct MainView: View {
     @Environment(AppModel.self) private var model
+    @State private var actions = ActionsModel()
+    @State private var tab = MainView.initialTab
+
+    /// Debug builds can open on a tab with `UNISON_TAB` (chat, backlog).
+    private static var initialTab: String {
+        #if DEBUG
+        return ProcessInfo.processInfo.environment["UNISON_TAB"] ?? "chat"
+        #else
+        return "chat"
+        #endif
+    }
 
     var body: some View {
-        TabView {
-            Tab("Chat", systemImage: "bubble.left.and.bubble.right") {
-                screen("Chat") { ChatView() }
+        TabView(selection: $tab) {
+            Tab("Chat", systemImage: "bubble.left.and.bubble.right", value: "chat") {
+                screen("Chat") { ChatView(actions: actions) }
             }
-            Tab("Inbox", systemImage: "tray") {
-                screen("Inbox") { notBuilt("Inbox", systemImage: "tray") }
-            }
-            Tab("Backlog", systemImage: "list.number") {
-                screen("Backlog") { notBuilt("Backlog", systemImage: "list.number") }
+            .badge(actions.count)
+            Tab("Backlog", systemImage: "list.number", value: "backlog") {
+                screen("Backlog") { BacklogView() }
             }
         }
         .task { await model.load() }
+        .task(id: "\(model.participant?.id ?? 0)-\(model.revision("message"))") {
+            if model.participant != nil { await actions.load(model) }
+        }
         // Follow live events while the app is in the foreground.
         // Keyed on the joined participant: the stream needs the workspace
         // list loaded and joined, which happens after launch.
@@ -104,10 +116,6 @@ struct MainView: View {
             .toolbar { WorkspaceMenu() }
         }
     }
-}
-
-private func notBuilt(_ title: String, systemImage: String) -> some View {
-    ContentUnavailableView(title, systemImage: systemImage, description: Text("Not built yet."))
 }
 
 /// The workspace switcher and sign-out, in every tab's navigation bar.

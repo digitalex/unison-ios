@@ -22,11 +22,12 @@ final class ChatModel {
         }
     }
 
-    func send(_ body: String, parent: Int64?, app: AppModel) async -> Bool {
+    func send(_ body: String, parent: Int64?, action: Bool = false, app: AppModel) async -> Bool {
         guard let token = app.token, let ws = app.selected else { return false }
         do {
             let m: Message = try await app.api.post("api/workspaces/\(ws.id)/messages", token: token,
-                                                    body: NewMessage(body: body, parentId: parent))
+                                                    body: NewMessage(body: body, parentId: parent,
+                                                                     actionRequired: action ? true : nil))
             if !messages.contains(where: { $0.id == m.id }) {
                 messages.append(m)
             }
@@ -44,6 +45,7 @@ final class ChatModel {
 
 struct ChatView: View {
     @Environment(AppModel.self) private var app
+    let actions: ActionsModel
     @State private var chat = ChatModel()
     @State private var position = ScrollPosition(edge: .bottom)
 
@@ -59,7 +61,7 @@ struct ChatView: View {
                     LazyVStack(alignment: .leading, spacing: 16) {
                         ForEach(chat.topLevel) { m in
                             VStack(alignment: .leading, spacing: 6) {
-                                MessageRow(message: m, author: chat.people[m.authorId])
+                                MessageRow(message: m, author: chat.people[m.authorId], actions: actions)
                                 let replies = chat.replies(to: m.id)
                                 NavigationLink(value: m.id) {
                                     Label(replies.isEmpty ? "Reply" : replies.count == 1 ? "1 reply" : "\(replies.count) replies",
@@ -80,10 +82,10 @@ struct ChatView: View {
             withAnimation { position.scrollTo(edge: .bottom) }
         }
         .safeAreaInset(edge: .bottom) {
-            Composer(placeholder: "Message") { await chat.send($0, parent: nil, app: app) }
+            Composer(placeholder: "Message", canFlag: true) { await chat.send($0, parent: nil, action: $1, app: app) }
         }
         .navigationDestination(for: Int64.self) { id in
-            ThreadView(chat: chat, parentID: id)
+            ThreadView(chat: chat, actions: actions, parentID: id)
         }
         .task(id: "\(app.selectedID ?? "")-\(app.revision("message"))-\(app.revision("participant"))") {
             await chat.load(app)
@@ -94,17 +96,18 @@ struct ChatView: View {
 struct ThreadView: View {
     @Environment(AppModel.self) private var app
     let chat: ChatModel
+    let actions: ActionsModel
     let parentID: Int64
 
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 16) {
                 if let parent = chat.messages.first(where: { $0.id == parentID }) {
-                    MessageRow(message: parent, author: chat.people[parent.authorId])
+                    MessageRow(message: parent, author: chat.people[parent.authorId], actions: actions)
                     Divider()
                 }
                 ForEach(chat.replies(to: parentID)) { m in
-                    MessageRow(message: m, author: chat.people[m.authorId])
+                    MessageRow(message: m, author: chat.people[m.authorId], actions: actions)
                 }
             }
             .padding()
@@ -113,16 +116,27 @@ struct ThreadView: View {
         .navigationTitle("Thread")
         .navigationBarTitleDisplayMode(.inline)
         .safeAreaInset(edge: .bottom) {
-            Composer(placeholder: "Reply") { await chat.send($0, parent: parentID, app: app) }
+            Composer(placeholder: "Reply") { body, _ in await chat.send(body, parent: parentID, app: app) }
         }
     }
 }
 
 struct MessageRow: View {
+    @Environment(AppModel.self) private var app
     let message: Message
     let author: Participant?
+    var actions: ActionsModel? = nil
+
+    private var needsMe: Bool { actions?.needsMe(message.id) ?? false }
 
     var body: some View {
+        content
+            .padding(needsMe ? 10 : 0)
+            .background(needsMe ? AnyShapeStyle(.orange.opacity(0.12)) : AnyShapeStyle(.clear),
+                        in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var content: some View {
         HStack(alignment: .top, spacing: 10) {
             Text(author?.emoji ?? "👤")
                 .font(.title3)
@@ -138,6 +152,30 @@ struct MessageRow: View {
                     Text(message.date, format: .relative(presentation: .numeric, unitsStyle: .narrow))
                         .font(.caption)
                         .foregroundStyle(.tertiary)
+                }
+                if needsMe {
+                    HStack {
+                        Label("Needs you", systemImage: "flag.fill")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.orange)
+                        Spacer()
+                        Button("Done", systemImage: "checkmark") {
+                            Task { await actions?.done(message.id, app: app) }
+                        }
+                        .font(.caption.weight(.semibold))
+                        .buttonStyle(.bordered)
+                        .controlSize(.mini)
+                    }
+                } else if actions?.doneHere.contains(message.id) == true {
+                    HStack(spacing: 6) {
+                        Label("Done", systemImage: "checkmark").foregroundStyle(.secondary)
+                        Button("Undo") { Task { await actions?.undo(message.id, app: app) } }
+                    }
+                    .font(.caption)
+                } else if message.actionRequired == true {
+                    Label("Action requested", systemImage: "flag")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
                 if let item = message.item {
                     Text("#\(item.id) \(item.title)")
@@ -174,12 +212,26 @@ struct MessageRow: View {
 /// A growing text field with a send button, pinned to the bottom.
 struct Composer: View {
     let placeholder: String
-    let send: (String) async -> Bool
+    /// Offers a "Needs action" flag: the message asks those it @mentions to act.
+    var canFlag = false
+    let send: (String, Bool) async -> Bool
     @State private var text = ""
+    @State private var flagged = false
     @State private var sending = false
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 8) {
+            if canFlag {
+                Button {
+                    flagged.toggle()
+                } label: {
+                    Image(systemName: flagged ? "flag.fill" : "flag")
+                        .font(.system(size: 20))
+                        .foregroundStyle(flagged ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+                        .frame(width: 32, height: 38)
+                }
+                .accessibilityLabel(flagged ? "Needs action: on" : "Needs action: off")
+            }
             TextField(placeholder, text: $text, axis: .vertical)
                 .lineLimit(1...6)
                 .padding(.horizontal, 14)
@@ -189,7 +241,10 @@ struct Composer: View {
                 let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
                 sending = true
                 Task {
-                    if await send(body) { text = "" }
+                    if await send(body, flagged) {
+                        text = ""
+                        flagged = false
+                    }
                     sending = false
                 }
             } label: {
