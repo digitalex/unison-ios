@@ -170,20 +170,22 @@ struct JoinResponse: Decodable, Sendable {
     let participant: Participant
 }
 
-struct DeviceStart: Decodable, Sendable {
-    let deviceCode: String
-    let userCode: String
-    let verificationUrlComplete: URL
-    let interval: Int
-    let expiresIn: Int
-}
-
-struct DevicePoll: Decodable, Sendable {
-    let status: String
-    let token: String?
-}
-
-struct DeviceTokenRequest: Encodable, Sendable {
-    let deviceCode: String
+struct AppTokenRequest: Encodable, Sendable {
+    let code: String
+    let codeVerifier: String
     let label: String
+}
+
+struct AppToken: Decodable, Sendable {
+    let token: String
+}
+
+extension Data {
+    /// Base64url without padding, as PKCE uses.
+    var base64URLEncoded: String {
+        base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
 }
