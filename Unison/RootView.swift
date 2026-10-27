@@ -39,13 +39,8 @@ struct SignInView: View {
                     .multilineTextAlignment(.center)
             }
             Spacer()
-            if let code = model.pendingCode {
-                VStack(spacing: 12) {
-                    ProgressView()
-                    Text("Confirm the code **\(code)** in the browser.")
-                        .multilineTextAlignment(.center)
-                    Button("Cancel", role: .cancel) { model.cancelSignIn() }
-                }
+            if model.signingIn {
+                ProgressView()
             } else {
                 Button {
                     model.signIn()
@@ -58,6 +53,14 @@ struct SignInView: View {
             }
         }
         .padding(24)
+        #if DEBUG
+        .task { // UNISON_AUTO_SIGN_IN=1 starts sign-in at launch, for testing
+            if ProcessInfo.processInfo.environment["UNISON_AUTO_SIGN_IN"] != nil {
+                try? await Task.sleep(for: .seconds(1))
+                model.signIn()
+            }
+        }
+        #endif
     }
 }
 
