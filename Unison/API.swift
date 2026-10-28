@@ -50,7 +50,9 @@ struct API: Sendable {
     }
 
     private func send<T: Decodable, B: Encodable>(_ method: String, _ path: String, token: String?, body: B?) async throws -> T {
-        var req = URLRequest(url: base.appending(path: path))
+        // `appending(path:)` would escape a query ("?status=done") into the path.
+        guard let url = URL(string: path, relativeTo: base) else { throw URLError(.badURL) }
+        var req = URLRequest(url: url)
         req.httpMethod = method
         req.setValue("application/json", forHTTPHeaderField: "Accept")
         if let token {
@@ -106,6 +108,31 @@ extension JSONEncoder {
 struct Workspace: Decodable, Identifiable, Hashable, Sendable {
     let id: String
     let name: String
+    var canvasUrl: String? = nil
+    var repos: [Repo]? = nil
+
+    struct Repo: Decodable, Identifiable, Hashable, Sendable {
+        let id: Int64
+        let url: String
+    }
+}
+
+/// `GET api/me/user`: the signed-in account.
+struct User: Decodable, Sendable {
+    let displayName: String
+    let avatarUrl: String?
+}
+
+struct NewWorkspace: Encodable, Sendable {
+    let name: String
+}
+
+struct InviteRequest: Encodable, Sendable {
+    let link = true
+}
+
+struct InviteLink: Decodable, Sendable {
+    let url: String
 }
 
 struct Participant: Decodable, Identifiable, Sendable {
@@ -151,6 +178,15 @@ struct NewMessage: Encodable, Sendable {
     var actionRequired: Bool? = nil
 }
 
+struct Device: Decodable, Sendable {
+    let id: Int64
+}
+
+struct NewDevice: Encodable, Sendable {
+    let apnsToken: String
+    let label: String
+}
+
 /// An event from the workspace stream; only its type matters to the app.
 struct WorkspaceEvent: Decodable, Sendable {
     let seq: Int64
@@ -161,20 +197,22 @@ struct JoinResponse: Decodable, Sendable {
     let participant: Participant
 }
 
-struct DeviceStart: Decodable, Sendable {
-    let deviceCode: String
-    let userCode: String
-    let verificationUrlComplete: URL
-    let interval: Int
-    let expiresIn: Int
-}
-
-struct DevicePoll: Decodable, Sendable {
-    let status: String
-    let token: String?
-}
-
-struct DeviceTokenRequest: Encodable, Sendable {
-    let deviceCode: String
+struct AppTokenRequest: Encodable, Sendable {
+    let code: String
+    let codeVerifier: String
     let label: String
+}
+
+struct AppToken: Decodable, Sendable {
+    let token: String
+}
+
+extension Data {
+    /// Base64url without padding, as PKCE uses.
+    var base64URLEncoded: String {
+        base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
 }

@@ -19,6 +19,7 @@ struct RootView: View {
         } message: {
             Text(model.error ?? "")
         }
+        .preferredColorScheme(.dark)
     }
 }
 
@@ -39,13 +40,8 @@ struct SignInView: View {
                     .multilineTextAlignment(.center)
             }
             Spacer()
-            if let code = model.pendingCode {
-                VStack(spacing: 12) {
-                    ProgressView()
-                    Text("Confirm the code **\(code)** in the browser.")
-                        .multilineTextAlignment(.center)
-                    Button("Cancel", role: .cancel) { model.cancelSignIn() }
-                }
+            if model.signingIn {
+                ProgressView()
             } else {
                 Button {
                     model.signIn()
@@ -58,6 +54,14 @@ struct SignInView: View {
             }
         }
         .padding(24)
+        #if DEBUG
+        .task { // UNISON_AUTO_SIGN_IN=1 starts sign-in at launch, for testing
+            if ProcessInfo.processInfo.environment["UNISON_AUTO_SIGN_IN"] != nil {
+                try? await Task.sleep(for: .seconds(1))
+                model.signIn()
+            }
+        }
+        #endif
     }
 }
 
@@ -65,8 +69,14 @@ struct MainView: View {
     @Environment(AppModel.self) private var model
     @State private var actions = ActionsModel()
     @State private var tab = MainView.initialTab
+    @State private var chatPath: [Int64] = []
+    @State private var backlogPath: [Int64] = MainView.initialItem
+    @State private var settingsPath: [Int64] = []
+    @State private var newWorkspace = false
+    @State private var newWorkspaceName = ""
 
-    /// Debug builds can open on a tab with `UNISON_TAB` (chat, backlog).
+    /// Debug builds can open on a tab with `UNISON_TAB` (chat, backlog, settings),
+    /// and on a backlog item with `UNISON_ITEM`, for screenshots.
     private static var initialTab: String {
         #if DEBUG
         return ProcessInfo.processInfo.environment["UNISON_TAB"] ?? "chat"
@@ -75,17 +85,47 @@ struct MainView: View {
         #endif
     }
 
+    private static var initialItem: [Int64] {
+        #if DEBUG
+        return ProcessInfo.processInfo.environment["UNISON_ITEM"].flatMap { Int64($0) }.map { [$0] } ?? []
+        #else
+        return []
+        #endif
+    }
+
     var body: some View {
         TabView(selection: $tab) {
             Tab("Chat", systemImage: "bubble.left.and.bubble.right", value: "chat") {
-                screen("Chat") { ChatView(actions: actions) }
+                screen("Chat", path: $chatPath) { ChatView(actions: actions) }
             }
             .badge(actions.count)
             Tab("Backlog", systemImage: "list.number", value: "backlog") {
-                screen("Backlog") { BacklogView() }
+                screen("Backlog", path: $backlogPath) { BacklogView() }
+            }
+            Tab("Settings", systemImage: "gearshape", value: "settings") {
+                screen("Settings", path: $settingsPath) { SettingsView() }
             }
         }
-        .task { await model.load() }
+        .alert("New workspace", isPresented: $newWorkspace) {
+            TextField("Name", text: $newWorkspaceName)
+            Button("Cancel", role: .cancel) {}
+            Button("Create") {
+                let name = newWorkspaceName.trimmingCharacters(in: .whitespaces)
+                Task { await model.createWorkspace(named: name) }
+            }
+            .disabled(newWorkspaceName.trimmingCharacters(in: .whitespaces).isEmpty)
+        } message: {
+            Text("You'll be its first member.")
+        }
+        .task {
+            await model.load()
+            await model.enablePush()
+        }
+        // Follow a tapped notification or a link, once the workspaces are loaded.
+        .task(id: RouteTrigger(route: model.route, ready: model.participant != nil)) {
+            guard let route = model.route, model.participant != nil else { return }
+            await follow(route)
+        }
         .task(id: "\(model.participant?.id ?? 0)-\(model.revision("message"))") {
             if model.participant != nil { await actions.load(model) }
         }
@@ -99,8 +139,23 @@ struct MainView: View {
 
     @Environment(\.scenePhase) private var scenePhase
 
-    private func screen(_ title: String, @ViewBuilder content: () -> some View) -> some View {
-        NavigationStack {
+    private func follow(_ route: Route) async {
+        model.route = nil
+        if let ws = route.workspaceID, ws != model.selectedID, model.workspaces.contains(where: { $0.id == ws }) {
+            await model.select(ws)
+        }
+        if let thread = route.thread {
+            tab = "chat"
+            chatPath = [thread]
+        } else if let item = route.itemID {
+            tab = "backlog"
+            backlogPath = [item]
+        }
+        log.info("route: opened \(tab, privacy: .public) \(route.thread ?? route.itemID ?? 0)")
+    }
+
+    private func screen(_ title: String, path: Binding<[Int64]>, @ViewBuilder content: () -> some View) -> some View {
+        NavigationStack(path: path) {
             Group {
                 if model.workspaces.isEmpty {
                     ContentUnavailableView("No workspaces", systemImage: "square.dashed",
@@ -111,38 +166,81 @@ struct MainView: View {
                     content()
                 }
             }
-            .navigationTitle(model.selected?.name ?? title)
+            // One opaque row: the tab's title on the left, the workspace on the right.
+            .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { WorkspaceMenu() }
+            .toolbar(removing: .title)
+            .toolbar {
+                TitleItem(title: title)
+                WorkspaceMenu {
+                    newWorkspaceName = ""
+                    newWorkspace = true
+                }
+            }
+            .toolbarBackground(Color(white: 0.07), for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
         }
     }
 }
 
-/// The workspace switcher and sign-out, in every tab's navigation bar.
+private struct RouteTrigger: Equatable {
+    let route: Route?
+    let ready: Bool
+}
+
+/// The tab's title, at the top left, without the iOS 26 glass bubble.
+private struct TitleItem: ToolbarContent {
+    let title: String
+
+    var body: some ToolbarContent {
+        if #available(iOS 26, *) {
+            item.sharedBackgroundVisibility(.hidden)
+        } else {
+            item
+        }
+    }
+
+    private var item: some ToolbarContent {
+        ToolbarItem(placement: .topBarLeading) {
+            Text(title).font(.title3.bold()).fixedSize()
+        }
+    }
+}
+
+/// The workspace switcher, at the top right of every tab.
 struct WorkspaceMenu: ToolbarContent {
     @Environment(AppModel.self) private var model
+    let create: () -> Void
 
     var body: some ToolbarContent {
         ToolbarItem(placement: .topBarTrailing) {
             Menu {
-                if model.workspaces.count > 1 {
-                    Picker("Workspace", selection: Binding(
-                        get: { model.selectedID },
-                        set: { id in if let id { Task { await model.select(id) } } }
-                    )) {
-                        ForEach(model.workspaces) { ws in
-                            Text(ws.name).tag(Optional(ws.id))
-                        }
+                Picker("Your workspaces", selection: Binding(
+                    get: { model.selectedID },
+                    set: { id in if let id { Task { await model.select(id) } } }
+                )) {
+                    ForEach(model.workspaces) { ws in
+                        Text(ws.name).tag(Optional(ws.id))
                     }
                 }
-                if let p = model.participant {
-                    Text("\(p.emoji) \(p.name)")
-                }
-                Button("Sign out", systemImage: "rectangle.portrait.and.arrow.right", role: .destructive) {
-                    Task { await model.signOut() }
-                }
+                Divider()
+                Button("New workspace…", systemImage: "plus", action: create)
             } label: {
-                Image(systemName: "person.crop.circle")
+                let name = model.selected?.name ?? ""
+                HStack(spacing: 6) {
+                    Text(String(name.prefix(1)).uppercased())
+                        .font(.caption.bold())
+                        .foregroundStyle(.black)
+                        .frame(width: 20, height: 20)
+                        .background(.tint, in: RoundedRectangle(cornerRadius: 6))
+                    Text(name)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                    Image(systemName: "chevron.down")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.secondary)
+                }
+                .fixedSize()
             }
         }
     }

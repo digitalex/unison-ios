@@ -28,7 +28,7 @@ struct Comment: Decodable, Identifiable, Sendable {
     }
 }
 
-/// The Backlog tab's data, read-only for now.
+/// The Backlog tab's data.
 @MainActor
 @Observable
 final class BacklogModel {
@@ -57,19 +57,31 @@ final class BacklogModel {
             app.handle(error)
         }
     }
+
+    /// Adds an item at the bottom of the backlog. Returns whether it was added.
+    func add(_ app: AppModel, title: String, body: String) async -> Bool {
+        guard let token = app.token, let ws = app.selected else { return false }
+        do {
+            let _: BacklogItem = try await app.api.post("api/workspaces/\(ws.id)/backlog", token: token,
+                                                        body: NewItem(title: title, body: body))
+            await load(app)
+            return true
+        } catch {
+            app.handle(error)
+            return false
+        }
+    }
+}
+
+struct NewItem: Encodable, Sendable {
+    let title: String
+    let body: String
 }
 
 struct BacklogView: View {
     @Environment(AppModel.self) private var app
     @State private var backlog = BacklogModel()
-    /// Debug builds can open an item with `UNISON_ITEM`, for screenshots.
-    @State private var debugItem: Int64? = {
-        #if DEBUG
-        return ProcessInfo.processInfo.environment["UNISON_ITEM"].flatMap { Int64($0) }
-        #else
-        return nil
-        #endif
-    }()
+    @State private var adding = false
 
     var body: some View {
         @Bindable var backlog = backlog
@@ -97,9 +109,15 @@ struct BacklogView: View {
         .navigationDestination(for: Int64.self) { id in
             ItemDetailView(itemID: id, backlog: backlog)
         }
-        .navigationDestination(item: $debugItem) { id in
-            ItemDetailView(itemID: id, backlog: backlog)
+        .safeAreaInset(edge: .bottom) {
+            Button("New item", systemImage: "plus") { adding = true }
+                .buttonStyle(.borderedProminent)
+                .padding(.bottom, 8)
         }
+        .sheet(isPresented: $adding) {
+            NewItemSheet(backlog: backlog)
+        }
+
         .task(id: "\(app.selectedID ?? "")-\(backlog.filter)-\(app.revision("backlog"))-\(app.revision("pr"))-\(app.revision("comment"))") {
             await backlog.load(app)
         }
@@ -253,4 +271,48 @@ struct ItemDetailView: View {
 
 struct NewComment: Encodable, Sendable {
     let body: String
+}
+
+/// Adds a backlog item: a title and optional details.
+struct NewItemSheet: View {
+    @Environment(AppModel.self) private var app
+    @Environment(\.dismiss) private var dismiss
+    let backlog: BacklogModel
+    @State private var title = ""
+    @State private var details = ""
+    @State private var saving = false
+    @FocusState private var titleFocused: Bool
+
+    private var trimmedTitle: String { title.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                TextField("Title", text: $title, axis: .vertical)
+                    .focused($titleFocused)
+                TextField("Details (optional)", text: $details, axis: .vertical)
+                    .lineLimit(4...)
+            }
+            .navigationTitle("New item")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Add") {
+                        saving = true
+                        Task {
+                            let details = details.trimmingCharacters(in: .whitespacesAndNewlines)
+                            if await backlog.add(app, title: trimmedTitle, body: details) { dismiss() }
+                            saving = false
+                        }
+                    }
+                    .disabled(trimmedTitle.isEmpty || saving)
+                }
+            }
+            .onAppear { titleFocused = true }
+        }
+        .presentationDetents([.medium, .large])
+    }
 }

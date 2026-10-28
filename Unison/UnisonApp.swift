@@ -2,12 +2,15 @@ import SwiftUI
 
 @main
 struct UnisonApp: App {
-    @State private var model = AppModel()
+    @UIApplicationDelegateAdaptor private var delegate: AppDelegate
 
     var body: some Scene {
         WindowGroup {
             RootView()
-                .environment(model)
+                .environment(delegate.model)
+                .onOpenURL { url in
+                    if let route = Route(url: url) { delegate.model.route = route }
+                }
         }
     }
 }

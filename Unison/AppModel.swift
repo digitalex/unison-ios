@@ -1,6 +1,8 @@
 import AuthenticationServices
+import CryptoKit
 import Foundation
 import Observation
+import UserNotifications
 import OSLog
 import UIKit
 
@@ -13,9 +15,12 @@ final class AppModel {
     private(set) var token: String?
     private(set) var workspaces: [Workspace] = []
     private(set) var participant: Participant?
-    /// The code shown while the user approves the sign-in in the browser.
-    private(set) var pendingCode: String?
+    /// True while the GitHub sign-in sheet is up.
+    private(set) var signingIn = false
     var error: String?
+    /// Where a tapped notification or a link asks to go; the tab view
+    /// follows it and clears it.
+    var route: Route?
     /// Bumped per event kind ("message", "inbox", …) as the stream delivers
     /// events, so screens can refetch with `.task(id: model.revision(…))`.
     private(set) var revisions: [String: Int] = [:]
@@ -27,7 +32,6 @@ final class AppModel {
     var selected: Workspace? { workspaces.first { $0.id == selectedID } }
 
     let api = API(base: API.server)
-    private var authSession: ASWebAuthenticationSession?
     private let presenter = AuthPresenter()
     private var signInTask: Task<Void, Never>?
 
@@ -44,82 +48,61 @@ final class AppModel {
         #endif
     }
 
-    // MARK: Sign in (device flow)
+    // MARK: Sign in
 
-    /// Signs in with the device flow `unison login` uses: the user approves
-    /// the code in a browser sheet (signing in with GitHub there) while the
-    /// app polls for the session token.
+    /// Signs in with GitHub in a browser sheet. The server's app flow
+    /// (`/auth/github/start?app=1`) redirects back to `unison://auth?code=…`
+    /// with a one-time code, which only this app can redeem: it's bound to
+    /// the PKCE challenge of a verifier that never leaves the app.
     func signIn() {
         signInTask?.cancel()
         error = nil
+        signingIn = true
         signInTask = Task {
+            defer { signingIn = false }
             do {
-                let start: DeviceStart = try await api.post("api/auth/device", token: nil)
-                pendingCode = start.userCode
-                presentBrowser(start.verificationUrlComplete)
-                let token = try await poll(start)
-                Keychain.save(token)
-                self.token = token
-                await load()
+                let verifier = Self.randomVerifier()
+                let challenge = Data(SHA256.hash(data: Data(verifier.utf8))).base64URLEncoded
+                var start = URLComponents(url: api.base.appending(path: "auth/github/start"), resolvingAgainstBaseURL: false)!
+                start.queryItems = [URLQueryItem(name: "app", value: "1"), URLQueryItem(name: "code_challenge", value: challenge)]
+                let callback = try await authenticate(start.url!)
+                guard let code = URLComponents(url: callback, resolvingAgainstBaseURL: false)?
+                    .queryItems?.first(where: { $0.name == "code" })?.value else {
+                    throw APIError(status: 0, code: nil, message: "Sign-in didn't complete. Try again.")
+                }
+                let res: AppToken = try await api.post("api/auth/app/token", token: nil,
+                                                       body: AppTokenRequest(code: code, codeVerifier: verifier, label: "iPhone"))
+                Keychain.save(res.token)
+                token = res.token // the tab view then loads and enables push
+            } catch let e as ASWebAuthenticationSessionError where e.code == .canceledLogin {
             } catch is CancellationError {
             } catch {
                 self.error = error.localizedDescription
             }
-            finishSignIn()
         }
     }
 
-    func cancelSignIn() {
-        signInTask?.cancel()
-        finishSignIn()
-    }
-
-    private func finishSignIn() {
-        pendingCode = nil
-        authSession?.cancel()
-        authSession = nil
-    }
-
-    private func poll(_ start: DeviceStart) async throws -> String {
-        var interval = max(start.interval, 1)
-        let deadline = Date.now.addingTimeInterval(TimeInterval(start.expiresIn))
-        let req = DeviceTokenRequest(deviceCode: start.deviceCode, label: "iPhone")
-        while Date.now < deadline {
-            try await Task.sleep(for: .seconds(interval))
-            let res: DevicePoll = try await api.post("api/auth/device/token", token: nil, body: req)
-            switch res.status {
-            case "pending":
-                continue
-            case "slow_down":
-                interval += 5
-            case "denied":
-                throw APIError(status: 0, code: nil, message: "Sign-in was denied.")
-            default:
-                if let token = res.token {
-                    return token
-                }
-                if res.status == "expired" {
-                    throw APIError(status: 0, code: nil, message: "The sign-in code expired. Try again.")
+    /// Runs the browser sheet until the server redirects to `unison://…`.
+    private func authenticate(_ url: URL) async throws -> URL {
+        try await withCheckedThrowingContinuation { continuation in
+            let session = ASWebAuthenticationSession(url: url, callback: .customScheme("unison")) { url, error in
+                if let url {
+                    continuation.resume(returning: url)
+                } else {
+                    continuation.resume(throwing: error ?? CancellationError())
                 }
             }
+            session.presentationContextProvider = presenter
+            session.prefersEphemeralWebBrowserSession = false
+            session.start()
         }
-        throw APIError(status: 0, code: nil, message: "The sign-in code expired. Try again.")
     }
 
-    private func presentBrowser(_ url: URL) {
-        // No callback ever arrives: the app closes the sheet itself once the
-        // poll returns a token. The completion only fires early when the
-        // user closes the sheet, which cancels the sign-in.
-        let session = ASWebAuthenticationSession(url: url, callback: .customScheme("unison")) { [weak self] _, _ in
-            Task { @MainActor in
-                guard let self, self.authSession != nil, self.token == nil else { return }
-                self.cancelSignIn()
-            }
-        }
-        session.presentationContextProvider = presenter
-        session.prefersEphemeralWebBrowserSession = false
-        authSession = session
-        session.start()
+    /// A PKCE verifier: 32 random bytes, base64url (43 characters).
+    private static func randomVerifier() -> String {
+        var bytes = [UInt8](repeating: 0, count: 32)
+        _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        return Data(bytes).base64URLEncoded
     }
 
     // MARK: Workspaces
@@ -134,6 +117,18 @@ final class AppModel {
                 selectedID = workspaces.first?.id
             }
             try await join()
+        } catch {
+            handle(error)
+        }
+    }
+
+    /// Creates a workspace (you become its first member) and switches to it.
+    func createWorkspace(named name: String) async {
+        guard let token else { return }
+        do {
+            let ws: Workspace = try await api.post("api/workspaces", token: token, body: NewWorkspace(name: name))
+            workspaces.append(ws)
+            await select(ws.id)
         } catch {
             handle(error)
         }
@@ -195,6 +190,40 @@ final class AppModel {
         }
     }
 
+    // MARK: Push notifications
+
+    /// Registers for remote notifications (the delegate then posts the device
+    /// token with `registerDevice`) and asks for permission to show them.
+    /// Registering doesn't need the permission, so the server knows the device
+    /// either way; iOS only shows pushes once the user allows them.
+    func enablePush() async {
+        guard token?.hasPrefix("us_") == true else { return } // devices belong to accounts
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["UNISON_NO_PUSH"] != nil { return } // no prompt over screenshots
+        #endif
+        UIApplication.shared.registerForRemoteNotifications()
+        do {
+            let granted = try await UNUserNotificationCenter.current()
+                .requestAuthorization(options: [.alert, .sound, .badge])
+            log.info("push: permission \(granted ? "granted" : "denied", privacy: .public)")
+        } catch {
+            log.error("push: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// Registers this device's APNs token with the account (`POST /api/me/devices`).
+    /// Signing out removes it on the server.
+    func registerDevice(_ apnsToken: String) async {
+        guard let token, token.hasPrefix("us_") else { return }
+        do {
+            let _: Device = try await api.post("api/me/devices", token: token,
+                                               body: NewDevice(apnsToken: apnsToken, label: "iPhone"))
+            log.info("push: device registered")
+        } catch {
+            log.error("push: device registration failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
     // MARK: Sign out
 
     func signOut() async {
@@ -230,10 +259,10 @@ final class AppModel {
 final class AuthPresenter: NSObject, ASWebAuthenticationPresentationContextProviding {
     func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
         MainActor.assumeIsolated {
-            UIApplication.shared.connectedScenes
+            let windows = UIApplication.shared.connectedScenes
                 .compactMap { $0 as? UIWindowScene }
                 .flatMap(\.windows)
-                .first(where: \.isKeyWindow) ?? ASPresentationAnchor()
+            return windows.first(where: \.isKeyWindow) ?? windows.first ?? ASPresentationAnchor()
         }
     }
 }
