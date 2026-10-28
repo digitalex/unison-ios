@@ -50,7 +50,9 @@ struct API: Sendable {
     }
 
     private func send<T: Decodable, B: Encodable>(_ method: String, _ path: String, token: String?, body: B?) async throws -> T {
-        var req = URLRequest(url: base.appending(path: path))
+        // `appending(path:)` would escape a query ("?status=done") into the path.
+        guard let url = URL(string: path, relativeTo: base) else { throw URLError(.badURL) }
+        var req = URLRequest(url: url)
         req.httpMethod = method
         req.setValue("application/json", forHTTPHeaderField: "Accept")
         if let token {
