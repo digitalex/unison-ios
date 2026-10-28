@@ -72,6 +72,8 @@ struct MainView: View {
     @State private var chatPath: [Int64] = []
     @State private var backlogPath: [Int64] = MainView.initialItem
     @State private var settingsPath: [Int64] = []
+    @State private var newWorkspace = false
+    @State private var newWorkspaceName = ""
 
     /// Debug builds can open on a tab with `UNISON_TAB` (chat, backlog, settings),
     /// and on a backlog item with `UNISON_ITEM`, for screenshots.
@@ -103,6 +105,17 @@ struct MainView: View {
             Tab("Settings", systemImage: "gearshape", value: "settings") {
                 screen("Settings", path: $settingsPath) { SettingsView() }
             }
+        }
+        .alert("New workspace", isPresented: $newWorkspace) {
+            TextField("Name", text: $newWorkspaceName)
+            Button("Cancel", role: .cancel) {}
+            Button("Create") {
+                let name = newWorkspaceName.trimmingCharacters(in: .whitespaces)
+                Task { await model.createWorkspace(named: name) }
+            }
+            .disabled(newWorkspaceName.trimmingCharacters(in: .whitespaces).isEmpty)
+        } message: {
+            Text("You'll be its first member.")
         }
         .task {
             await model.load()
@@ -159,7 +172,10 @@ struct MainView: View {
             .toolbar(removing: .title)
             .toolbar {
                 TitleItem(title: title)
-                WorkspaceMenu()
+                WorkspaceMenu {
+                    newWorkspaceName = ""
+                    newWorkspace = true
+                }
             }
             .toolbarBackground(Color(white: 0.07), for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
@@ -194,6 +210,7 @@ private struct TitleItem: ToolbarContent {
 /// The workspace switcher, at the top right of every tab.
 struct WorkspaceMenu: ToolbarContent {
     @Environment(AppModel.self) private var model
+    let create: () -> Void
 
     var body: some ToolbarContent {
         ToolbarItem(placement: .topBarTrailing) {
@@ -206,6 +223,8 @@ struct WorkspaceMenu: ToolbarContent {
                         Text(ws.name).tag(Optional(ws.id))
                     }
                 }
+                Divider()
+                Button("New workspace…", systemImage: "plus", action: create)
             } label: {
                 let name = model.selected?.name ?? ""
                 HStack(spacing: 6) {

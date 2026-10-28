@@ -121,6 +121,10 @@ struct User: Decodable, Sendable {
     let avatarUrl: String?
 }
 
+struct NewWorkspace: Encodable, Sendable {
+    let name: String
+}
+
 struct InviteRequest: Encodable, Sendable {
     let link = true
 }

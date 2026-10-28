@@ -122,6 +122,18 @@ final class AppModel {
         }
     }
 
+    /// Creates a workspace (you become its first member) and switches to it.
+    func createWorkspace(named name: String) async {
+        guard let token else { return }
+        do {
+            let ws: Workspace = try await api.post("api/workspaces", token: token, body: NewWorkspace(name: name))
+            workspaces.append(ws)
+            await select(ws.id)
+        } catch {
+            handle(error)
+        }
+    }
+
     func select(_ id: Workspace.ID) async {
         selectedID = id
         participant = nil
