@@ -69,15 +69,25 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         log.error("push: registration failed: \(error.localizedDescription, privacy: .public)")
     }
 
+    // These use the completion-handler forms: the async ones return off the
+    // main thread, and UIKit then aborts ("Call must be made on main thread")
+    // when a tap launches the app.
+
     // Show notifications while the app is open, too.
-    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
-                                            willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
-        [.banner, .list, .sound]
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
+                                            withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        completionHandler([.banner, .list, .sound])
     }
 
-    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
-                                            didReceive response: UNNotificationResponse) async {
-        guard let route = Route(userInfo: response.notification.request.content.userInfo) else { return }
-        await MainActor.run { model.route = route }
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+                                            withCompletionHandler completionHandler: @escaping () -> Void) {
+        let route = Route(userInfo: response.notification.request.content.userInfo)
+        nonisolated(unsafe) let done = completionHandler
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated {
+                if let route { self.model.route = route }
+                done()
+            }
+        }
     }
 }
