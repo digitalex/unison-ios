@@ -22,12 +22,11 @@ final class ChatModel {
         }
     }
 
-    func send(_ body: String, parent: Int64?, action: Bool = false, app: AppModel) async -> Bool {
+    func send(_ body: String, parent: Int64?, app: AppModel) async -> Bool {
         guard let token = app.token, let ws = app.selected else { return false }
         do {
             let m: Message = try await app.api.post("api/workspaces/\(ws.id)/messages", token: token,
-                                                    body: NewMessage(body: body, parentId: parent,
-                                                                     actionRequired: action ? true : nil))
+                                                    body: NewMessage(body: body, parentId: parent))
             if !messages.contains(where: { $0.id == m.id }) {
                 messages.append(m)
             }
@@ -82,7 +81,7 @@ struct ChatView: View {
             withAnimation { position.scrollTo(edge: .bottom) }
         }
         .safeAreaInset(edge: .bottom) {
-            Composer(placeholder: "Message", canFlag: true) { await chat.send($0, parent: nil, action: $1, app: app) }
+            Composer(placeholder: "Message") { await chat.send($0, parent: nil, app: app) }
         }
         .navigationDestination(for: Int64.self) { id in
             ThreadView(chat: chat, actions: actions, parentID: id)
@@ -118,7 +117,7 @@ struct ThreadView: View {
         // Opened straight from a notification, the chat may not be loaded yet.
         .task { if !chat.loaded { await chat.load(app) } }
         .safeAreaInset(edge: .bottom) {
-            Composer(placeholder: "Reply") { body, _ in await chat.send(body, parent: parentID, app: app) }
+            Composer(placeholder: "Reply") { await chat.send($0, parent: parentID, app: app) }
         }
     }
 }
@@ -214,26 +213,12 @@ struct MessageRow: View {
 /// A growing text field with a send button, pinned to the bottom.
 struct Composer: View {
     let placeholder: String
-    /// Offers a "Needs action" flag: the message asks those it @mentions to act.
-    var canFlag = false
-    let send: (String, Bool) async -> Bool
+    let send: (String) async -> Bool
     @State private var text = ""
-    @State private var flagged = false
     @State private var sending = false
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 8) {
-            if canFlag {
-                Button {
-                    flagged.toggle()
-                } label: {
-                    Image(systemName: flagged ? "flag.fill" : "flag")
-                        .font(.system(size: 20))
-                        .foregroundStyle(flagged ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
-                        .frame(width: 32, height: 38)
-                }
-                .accessibilityLabel(flagged ? "Needs action: on" : "Needs action: off")
-            }
             TextField(placeholder, text: $text, axis: .vertical)
                 .lineLimit(1...6)
                 .padding(.horizontal, 14)
@@ -243,9 +228,8 @@ struct Composer: View {
                 let body = text.trimmingCharacters(in: .whitespacesAndNewlines)
                 sending = true
                 Task {
-                    if await send(body, flagged) {
+                    if await send(body) {
                         text = ""
-                        flagged = false
                     }
                     sending = false
                 }
