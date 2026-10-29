@@ -204,10 +204,10 @@ struct ItemDetailView: View {
                             }
                         }
                         if !item.body.isEmpty {
-                            Text(markdown(item.body)).textSelection(.enabled)
+                            Text(richText(item.body, workspace: app.selectedID)).textSelection(.enabled)
                         }
                         if let note = item.closeNote, !note.isEmpty {
-                            Text(markdown(note)).font(.callout).foregroundStyle(.secondary)
+                            Text(richText(note, workspace: app.selectedID)).font(.callout).foregroundStyle(.secondary)
                         }
                     }
                     .padding(.vertical, 4)
@@ -276,10 +276,6 @@ struct ItemDetailView: View {
             app.handle(error)
             return false
         }
-    }
-
-    private func markdown(_ s: String) -> AttributedString {
-        (try? AttributedString(markdown: s, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(s)
     }
 }
 

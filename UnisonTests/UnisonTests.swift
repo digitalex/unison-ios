@@ -57,3 +57,27 @@ struct MessageTests {
         #expect(message.date <= .now)
     }
 }
+
+@Suite struct ItemLinkTests {
+    private func links(_ s: String) -> [String] {
+        richText(s, workspace: "ws_1").runs.compactMap { run in
+            run.link.flatMap { $0.scheme == "unison" ? Route(url: $0)?.itemID.map(String.init) : nil }
+        }
+    }
+
+    @Test func linksItemReferences() {
+        #expect(links("see #97 and (#98).") == ["97", "98"])
+    }
+
+    @Test func skipsPullRequestsWordsAndCode() {
+        #expect(links("PR #82, pull request #83, PRs #84") == [])
+        #expect(links("a#1 b&#2 x/#3 #4a `#5`") == [])
+    }
+
+    @Test func keepsWorkspaceAndExistingLinks() {
+        let text = richText("[docs](https://example.com/#6) #7", workspace: "ws_1")
+        let urls = text.runs.compactMap(\.link)
+        #expect(urls.count == 2)
+        #expect(Route(url: urls[1])?.workspaceID == "ws_1")
+    }
+}

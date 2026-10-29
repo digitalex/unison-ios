@@ -265,7 +265,7 @@ struct MessageRow: View {
                         .background(.tint.opacity(0.12), in: Capsule())
                         .foregroundStyle(.tint)
                 }
-                Text(markdown(message.body))
+                Text(richText(message.body, workspace: app.selectedID))
                     .font(.body)
                     .textSelection(.enabled)
                 if let reactions = message.reactions, !reactions.isEmpty {
@@ -281,10 +281,6 @@ struct MessageRow: View {
                 }
             }
         }
-    }
-
-    private func markdown(_ s: String) -> AttributedString {
-        (try? AttributedString(markdown: s, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(s)
     }
 }
 

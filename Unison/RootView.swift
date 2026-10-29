@@ -126,6 +126,12 @@ struct MainView: View {
         } message: {
             Text("You'll be its first member.")
         }
+        // In-app links (`#N` in messages) route here rather than via the system.
+        .environment(\.openURL, OpenURLAction { url in
+            guard let route = Route(url: url) else { return .systemAction }
+            model.route = route
+            return .handled
+        })
         .task {
             await model.load()
             await model.enablePush()
