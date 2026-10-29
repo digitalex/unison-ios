@@ -41,17 +41,31 @@ final class BacklogModel {
     private(set) var items: [BacklogItem] = []
     private(set) var people: [Int64: Participant] = [:]
     private(set) var loaded = false
+    /// The list the items are from.
+    private var shownPath: String?
+
+    private func show(_ l: [BacklogItem], _ p: [Participant]) {
+        items = l
+        people = Dictionary(p.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+    }
 
     func load(_ app: AppModel) async {
         guard let token = app.token, let ws = app.selected else { return }
         // No status means open and assigned items, in priority order.
         let path = "api/workspaces/\(ws.id)/backlog" + (filter == .done ? "?status=done" : "")
+        let pplPath = "api/workspaces/\(ws.id)/participants"
+        // On first load, a workspace switch or a new filter, show the cached copy while refetching.
+        if shownPath != path {
+            shownPath = path
+            let l: [BacklogItem]? = app.api.cached(path), p: [Participant]? = app.api.cached(pplPath)
+            show(l ?? [], p ?? [])
+            loaded = l != nil
+        }
         do {
             async let list: [BacklogItem] = app.api.get(path, token: token)
-            async let ppl: [Participant] = app.api.get("api/workspaces/\(ws.id)/participants", token: token)
+            async let ppl: [Participant] = app.api.get(pplPath, token: token)
             let (l, p) = try await (list, ppl)
-            items = l
-            people = Dictionary(p.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+            show(l, p)
             loaded = true
         } catch {
             app.handle(error)

@@ -12,9 +12,15 @@ final class SettingsModel {
 
     func load(_ app: AppModel) async {
         guard let token = app.token, let ws = app.selected else { return }
+        let detailPath = "api/workspaces/\(ws.id)", peoplePath = "api/workspaces/\(ws.id)/participants"
+        if workspace?.id != ws.id {
+            workspace = app.api.cached(detailPath)
+            members = app.api.cached(peoplePath) ?? []
+            user = app.api.cached("api/me/user")
+        }
         do {
-            async let detail: Workspace = app.api.get("api/workspaces/\(ws.id)", token: token)
-            async let people: [Participant] = app.api.get("api/workspaces/\(ws.id)/participants", token: token)
+            async let detail: Workspace = app.api.get(detailPath, token: token)
+            async let people: [Participant] = app.api.get(peoplePath, token: token)
             (workspace, members) = try await (detail, people)
             // Only account sessions have a user; a debug agent token gets a 401
             // here, which must not sign it out.

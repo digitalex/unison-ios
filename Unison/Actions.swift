@@ -11,6 +11,8 @@ final class ActionsModel {
     private(set) var open: Set<Int64> = []
     /// Messages marked done in this session, which offer Undo.
     private(set) var doneHere: Set<Int64> = []
+    /// The workspace `open` is from.
+    private var workspaceID: String?
 
     var count: Int { open.count }
 
@@ -18,8 +20,14 @@ final class ActionsModel {
 
     func load(_ app: AppModel) async {
         guard let token = app.token, let ws = app.selected else { return }
+        let path = "api/workspaces/\(ws.id)/actions"
+        if workspaceID != ws.id {
+            workspaceID = ws.id
+            let list: [Message]? = app.api.cached(path)
+            open = Set((list ?? []).map(\.id))
+        }
         do {
-            let list: [Message] = try await app.api.get("api/workspaces/\(ws.id)/actions", token: token)
+            let list: [Message] = try await app.api.get(path, token: token)
             open = Set(list.map(\.id))
         } catch let e as APIError where e.status == 404 {
             open = [] // a server from before actions
