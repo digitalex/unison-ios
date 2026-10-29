@@ -60,10 +60,12 @@ final class ChatModel {
 struct ChatView: View {
     @Environment(AppModel.self) private var app
     let actions: ActionsModel
-    /// Changes whenever the chat should jump to its newest message.
-    var scrollToEnd = 0
+    /// Changes whenever the chat should jump: to a message, or the newest.
+    var jump = ChatJump()
     @State private var chat = ChatModel()
     @State private var position = ScrollPosition(edge: .bottom)
+    /// A jump that came before the messages loaded (the first visit).
+    @State private var pendingJump: Int64?
 
     var body: some View {
         Group {
@@ -93,6 +95,7 @@ struct ChatView: View {
                             }
                         }
                     }
+                    .scrollTargetLayout()
                     .padding()
                 }
                 .defaultScrollAnchor(.bottom)
@@ -100,11 +103,18 @@ struct ChatView: View {
             }
         }
         .onChange(of: chat.messages.last?.id) {
-            withAnimation { position.scrollTo(edge: .bottom) }
+            // A pending jump waits for the load to finish (below).
+            if pendingJump == nil { withAnimation { scroll(to: nil) } }
         }
-        .onChange(of: scrollToEnd) {
-            withAnimation { position.scrollTo(edge: .bottom) }
+        .onChange(of: jump) {
+            if chat.loaded {
+                withAnimation { scroll(to: jump.to) }
+            } else {
+                pendingJump = jump.to
+            }
         }
+        // The tab's first tap creates this view with the jump already set.
+        .onAppear { pendingJump = jump.to }
         .safeAreaInset(edge: .bottom) {
             Composer(placeholder: "Message") { await chat.send($0, parent: nil, app: app) }
         }
@@ -113,8 +123,30 @@ struct ChatView: View {
         }
         .task(id: "\(app.selectedID ?? "")-\(app.revision("message"))-\(app.revision("participant"))") {
             await chat.load(app)
+            if let target = pendingJump {
+                // Let the list lay out first, or its bottom anchor wins.
+                await Task.yield()
+                pendingJump = nil
+                withAnimation { scroll(to: target) }
+            }
         }
     }
+
+    /// Scrolls to a top-level message, or to the newest one.
+    private func scroll(to id: Int64?) {
+        if let id {
+            position.scrollTo(id: id, anchor: .top)
+        } else {
+            position.scrollTo(edge: .bottom)
+        }
+    }
+}
+
+/// Where a tap on the Chat tab sends the chat: a top-level message, or the
+/// newest one (`to` nil). `tap` makes each tap a change.
+struct ChatJump: Equatable {
+    var tap = 0
+    var to: Int64?
 }
 
 /// Under a message with replies, as on the web (#87): who replied, how many

@@ -71,7 +71,7 @@ struct MainView: View {
     @State private var tab = MainView.initialTab
     @State private var chatPath: [Int64] = []
     /// Counts taps on the Chat tab; each one scrolls the chat to the end (#80).
-    @State private var chatTaps = 0
+    @State private var chatJump = ChatJump()
     @State private var backlogPath: [Int64] = MainView.initialItem
     @State private var settingsPath: [Int64] = []
     @State private var newWorkspace = false
@@ -98,14 +98,21 @@ struct MainView: View {
     var body: some View {
         // A Binding of our own, since the setter also runs when the selected tab is tapped again.
         TabView(selection: Binding(get: { tab }, set: { new in
+            // Tapping Chat goes to the oldest message asking you to act (its
+            // thread, for a reply), or else to the newest message (#110).
             if new == "chat" {
-                if tab == "chat" { chatPath = [] }
-                chatTaps += 1
+                if let oldest = actions.oldest {
+                    chatPath = oldest.thread == oldest.id ? [] : [oldest.thread]
+                    chatJump = ChatJump(tap: chatJump.tap + 1, to: oldest.thread)
+                } else {
+                    if tab == "chat" { chatPath = [] }
+                    chatJump = ChatJump(tap: chatJump.tap + 1, to: nil)
+                }
             }
             tab = new
         })) {
             Tab("Chat", systemImage: "bubble.left.and.bubble.right", value: "chat") {
-                screen("Chat", path: $chatPath) { ChatView(actions: actions, scrollToEnd: chatTaps) }
+                screen("Chat", path: $chatPath) { ChatView(actions: actions, jump: chatJump) }
             }
             .badge(actions.count)
             Tab("Backlog", systemImage: "list.number", value: "backlog") {
