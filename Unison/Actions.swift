@@ -14,7 +14,16 @@ final class ActionsModel {
     /// The workspace `open` is from.
     private var workspaceID: String?
 
+    /// Each open action's thread: its parent, or itself if top-level.
+    private var threads: [Int64: Int64] = [:]
+
     var count: Int { open.count }
+
+    /// The oldest message still asking you to act, and its thread, where
+    /// tapping the Chat tab goes (#110).
+    var oldest: (id: Int64, thread: Int64)? {
+        open.min().map { ($0, threads[$0] ?? $0) }
+    }
 
     func needsMe(_ id: Int64) -> Bool { open.contains(id) }
 
@@ -24,16 +33,21 @@ final class ActionsModel {
         if workspaceID != ws.id {
             workspaceID = ws.id
             let list: [Message]? = app.api.cached(path)
-            open = Set((list ?? []).map(\.id))
+            set(list ?? [])
         }
         do {
             let list: [Message] = try await app.api.get(path, token: token)
-            open = Set(list.map(\.id))
+            set(list)
         } catch let e as APIError where e.status == 404 {
             open = [] // a server from before actions
         } catch {
             app.handle(error)
         }
+    }
+
+    private func set(_ list: [Message]) {
+        open = Set(list.map(\.id))
+        threads = Dictionary(list.map { ($0.id, $0.parentId ?? $0.id) }, uniquingKeysWith: { a, _ in a })
     }
 
     func done(_ id: Int64, app: AppModel) async {
