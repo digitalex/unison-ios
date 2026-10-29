@@ -175,7 +175,6 @@ struct Message: Decodable, Identifiable, Sendable {
 struct NewMessage: Encodable, Sendable {
     let body: String
     let parentId: Int64?
-    var actionRequired: Bool? = nil
 }
 
 struct Device: Decodable, Sendable {
