@@ -9,6 +9,8 @@ struct BacklogItem: Decodable, Identifiable, Sendable {
     let closeNote: String?
     let prs: [PR]
     let commentCount: Int
+    /// The recurring task that added this item, if any (#112).
+    var scheduleId: Int64? = nil
 
     struct PR: Decodable, Identifiable, Sendable {
         let id: Int64
@@ -33,7 +35,7 @@ struct Comment: Decodable, Identifiable, Sendable {
 @Observable
 final class BacklogModel {
     enum Filter: String, CaseIterable, Identifiable {
-        case active = "Active", done = "Done"
+        case active = "Active", done = "Done", recurring = "Recurring"
         var id: Self { self }
     }
 
@@ -95,7 +97,10 @@ struct NewItem: Encodable, Sendable {
 struct BacklogView: View {
     @Environment(AppModel.self) private var app
     @State private var backlog = BacklogModel()
+    @State private var recurring = RecurringModel()
     @State private var adding = false
+    @State private var addingSchedule = false
+    @State private var editingSchedule: Schedule?
 
     var body: some View {
         @Bindable var backlog = backlog
@@ -106,34 +111,53 @@ struct BacklogView: View {
             .pickerStyle(.segmented)
             .listRowSeparator(.hidden)
 
-            if backlog.loaded && backlog.items.isEmpty {
-                ContentUnavailableView(backlog.filter == .done ? "Nothing done yet" : "The backlog is empty",
-                                       systemImage: "list.number")
-                    .listRowSeparator(.hidden)
-            }
-            ForEach(backlog.items) { item in
-                NavigationLink(value: item.id) {
-                    BacklogRow(item: item, assignee: item.assigneeId.flatMap { backlog.people[$0] })
+            if backlog.filter == .recurring {
+                RecurringList(recurring: recurring, editing: $editingSchedule)
+            } else {
+                if backlog.loaded && backlog.items.isEmpty {
+                    ContentUnavailableView(backlog.filter == .done ? "Nothing done yet" : "The backlog is empty",
+                                           systemImage: "list.number")
+                        .listRowSeparator(.hidden)
+                }
+                ForEach(backlog.items) { item in
+                    NavigationLink(value: item.id) {
+                        BacklogRow(item: item, assignee: item.assigneeId.flatMap { backlog.people[$0] })
+                    }
                 }
             }
         }
         .listStyle(.plain)
-        .overlay { if !backlog.loaded { ProgressView() } }
-        .refreshable { await backlog.load(app) }
+        .overlay { if backlog.filter == .recurring ? !recurring.loaded : !backlog.loaded { ProgressView() } }
+        .refreshable { await backlog.filter == .recurring ? recurring.load(app) : backlog.load(app) }
         .navigationDestination(for: Int64.self) { id in
             ItemDetailView(itemID: id, backlog: backlog)
         }
         .safeAreaInset(edge: .bottom) {
-            Button("New item", systemImage: "plus") { adding = true }
-                .buttonStyle(.borderedProminent)
-                .padding(.bottom, 8)
+            Group {
+                if backlog.filter == .recurring {
+                    Button("New recurring task", systemImage: "plus") { addingSchedule = true }
+                } else {
+                    Button("New item", systemImage: "plus") { adding = true }
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .padding(.bottom, 8)
         }
         .sheet(isPresented: $adding) {
             NewItemSheet(backlog: backlog)
         }
+        .sheet(isPresented: $addingSchedule) {
+            ScheduleSheet(recurring: recurring, schedule: nil)
+        }
+        .sheet(item: $editingSchedule) { sc in
+            ScheduleSheet(recurring: recurring, schedule: sc)
+        }
 
         .task(id: "\(app.selectedID ?? "")-\(backlog.filter)-\(app.revision("backlog"))-\(app.revision("pr"))-\(app.revision("comment"))") {
-            await backlog.load(app)
+            if backlog.filter != .recurring { await backlog.load(app) }
+        }
+        .task(id: "\(app.selectedID ?? "")-\(backlog.filter == .recurring)-\(app.revision("schedule"))") {
+            if backlog.filter == .recurring { await recurring.load(app) }
         }
     }
 }
@@ -150,6 +174,9 @@ struct BacklogRow: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(item.title)
                 HStack(spacing: 6) {
+                    if item.scheduleId != nil {
+                        Image(systemName: "repeat").accessibilityLabel("Recurring")
+                    }
                     if let assignee {
                         Text("\(assignee.emoji) \(assignee.name)")
                     }

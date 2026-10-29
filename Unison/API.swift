@@ -33,6 +33,10 @@ struct API: Sendable {
         ResponseCache.read(key)
     }
 
+    func patch<T: Decodable>(_ path: String, token: String?, body: some Encodable) async throws -> T {
+        try await send("PATCH", path, token: token, body: body)
+    }
+
     func delete<T: Decodable>(_ path: String, token: String?) async throws -> T {
         try await send("DELETE", path, token: token, body: Optional<Empty>.none)
     }
