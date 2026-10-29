@@ -70,6 +70,8 @@ struct MainView: View {
     @State private var actions = ActionsModel()
     @State private var tab = MainView.initialTab
     @State private var chatPath: [Int64] = []
+    /// Counts taps on the Chat tab; each one scrolls the chat to the end (#80).
+    @State private var chatTaps = 0
     @State private var backlogPath: [Int64] = MainView.initialItem
     @State private var settingsPath: [Int64] = []
     @State private var newWorkspace = false
@@ -94,9 +96,16 @@ struct MainView: View {
     }
 
     var body: some View {
-        TabView(selection: $tab) {
+        // A Binding of our own, since the setter also runs when the selected tab is tapped again.
+        TabView(selection: Binding(get: { tab }, set: { new in
+            if new == "chat" {
+                if tab == "chat" { chatPath = [] }
+                chatTaps += 1
+            }
+            tab = new
+        })) {
             Tab("Chat", systemImage: "bubble.left.and.bubble.right", value: "chat") {
-                screen("Chat", path: $chatPath) { ChatView(actions: actions) }
+                screen("Chat", path: $chatPath) { ChatView(actions: actions, scrollToEnd: chatTaps) }
             }
             .badge(actions.count)
             Tab("Backlog", systemImage: "list.number", value: "backlog") {

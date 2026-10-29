@@ -45,6 +45,8 @@ final class ChatModel {
 struct ChatView: View {
     @Environment(AppModel.self) private var app
     let actions: ActionsModel
+    /// Changes whenever the chat should jump to its newest message.
+    var scrollToEnd = 0
     @State private var chat = ChatModel()
     @State private var position = ScrollPosition(edge: .bottom)
 
@@ -78,6 +80,9 @@ struct ChatView: View {
             }
         }
         .onChange(of: chat.messages.last?.id) {
+            withAnimation { position.scrollTo(edge: .bottom) }
+        }
+        .onChange(of: scrollToEnd) {
             withAnimation { position.scrollTo(edge: .bottom) }
         }
         .safeAreaInset(edge: .bottom) {
