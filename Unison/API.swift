@@ -170,6 +170,18 @@ struct InviteLink: Decodable, Sendable {
     let url: String
 }
 
+/// `POST …/passes`: a single-use pass for an agent, and the prompt to paste into it.
+struct AgentPass: Decodable, Sendable {
+    let invitePrompt: String
+    let expiresAt: Int64
+
+    var expires: Date { Date(timeIntervalSince1970: TimeInterval(expiresAt) / 1000) }
+}
+
+struct NewRepo: Encodable, Sendable {
+    let url: String
+}
+
 struct Participant: Decodable, Identifiable, Sendable {
     let id: Int64
     let name: String
