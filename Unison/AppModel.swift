@@ -46,6 +46,11 @@ final class AppModel {
             selectedID = ProcessInfo.processInfo.environment["UNISON_WORKSPACE"] ?? selectedID
         }
         #endif
+        // Open on the last known workspaces while they reload.
+        if token != nil {
+            workspaces = api.cached("api/workspaces") ?? []
+            participant = cachedParticipant()
+        }
     }
 
     // MARK: Sign in
@@ -136,7 +141,7 @@ final class AppModel {
 
     func select(_ id: Workspace.ID) async {
         selectedID = id
-        participant = nil
+        participant = cachedParticipant()
         do {
             try await join()
         } catch {
@@ -152,8 +157,17 @@ final class AppModel {
             return
         }
         #endif
-        let res: JoinResponse = try await api.post("api/workspaces/\(ws.id)/join", token: token)
+        let res: JoinResponse = try await api.post("api/workspaces/\(ws.id)/join", token: token, cacheKey: Self.joinKey(ws.id))
         participant = res.participant
+    }
+
+    private static func joinKey(_ workspace: Workspace.ID) -> String { "join/\(workspace)" }
+
+    /// The participant from the last join of the selected workspace.
+    private func cachedParticipant() -> Participant? {
+        guard let id = selectedID else { return nil }
+        let res: JoinResponse? = api.cached(Self.joinKey(id))
+        return res?.participant
     }
 
     // MARK: Live updates
@@ -244,6 +258,7 @@ final class AppModel {
 
     private func clearSession() {
         Keychain.delete()
+        ResponseCache.clear()
         token = nil
         workspaces = []
         participant = nil

@@ -8,18 +8,33 @@ final class ChatModel {
     private(set) var people: [Int64: Participant] = [:]
     private(set) var loaded = false
 
+    /// The workspace the messages are from.
+    private var workspaceID: String?
+
     func load(_ app: AppModel) async {
         guard let token = app.token, let ws = app.selected else { return }
+        let msgsPath = "api/workspaces/\(ws.id)/messages", pplPath = "api/workspaces/\(ws.id)/participants"
+        // On first load or a workspace switch, show the cached copy while refetching.
+        if workspaceID != ws.id {
+            workspaceID = ws.id
+            let m: [Message]? = app.api.cached(msgsPath), p: [Participant]? = app.api.cached(pplPath)
+            show(m ?? [], p ?? [])
+            loaded = m != nil
+        }
         do {
-            async let msgs: [Message] = app.api.get("api/workspaces/\(ws.id)/messages", token: token)
-            async let ppl: [Participant] = app.api.get("api/workspaces/\(ws.id)/participants", token: token)
+            async let msgs: [Message] = app.api.get(msgsPath, token: token)
+            async let ppl: [Participant] = app.api.get(pplPath, token: token)
             let (m, p) = try await (msgs, ppl)
-            messages = m
-            people = Dictionary(p.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+            show(m, p)
             loaded = true
         } catch {
             app.handle(error)
         }
+    }
+
+    private func show(_ m: [Message], _ p: [Participant]) {
+        messages = m
+        people = Dictionary(p.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
     }
 
     func send(_ body: String, parent: Int64?, app: AppModel) async -> Bool {

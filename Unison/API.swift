@@ -17,12 +17,20 @@ struct API: Sendable {
         return defaultServer
     }
 
+    /// GETs are cached on disk under their path; see `cached(_:)`.
     func get<T: Decodable>(_ path: String, token: String?) async throws -> T {
-        try await send("GET", path, token: token, body: Optional<Empty>.none)
+        try await send("GET", path, token: token, body: Optional<Empty>.none, cacheKey: path)
     }
 
-    func post<T: Decodable>(_ path: String, token: String?, body: some Encodable = Empty()) async throws -> T {
-        try await send("POST", path, token: token, body: body)
+    /// `cacheKey` keeps the response on disk, for `cached(_:)`.
+    func post<T: Decodable>(_ path: String, token: String?, body: some Encodable = Empty(), cacheKey: String? = nil) async throws -> T {
+        try await send("POST", path, token: token, body: body, cacheKey: cacheKey)
+    }
+
+    /// The last response stored under `key` (a GET's path), so a screen can
+    /// show it at once while it refetches.
+    func cached<T: Decodable>(_ key: String) -> T? {
+        ResponseCache.read(key)
     }
 
     func delete<T: Decodable>(_ path: String, token: String?) async throws -> T {
@@ -49,7 +57,8 @@ struct API: Sendable {
         }
     }
 
-    private func send<T: Decodable, B: Encodable>(_ method: String, _ path: String, token: String?, body: B?) async throws -> T {
+    private func send<T: Decodable, B: Encodable>(_ method: String, _ path: String, token: String?, body: B?,
+                                                  cacheKey: String? = nil) async throws -> T {
         // `appending(path:)` would escape a query ("?status=done") into the path.
         guard let url = URL(string: path, relativeTo: base) else { throw URLError(.badURL) }
         var req = URLRequest(url: url)
@@ -68,7 +77,33 @@ struct API: Sendable {
             let e = try? JSONDecoder.api.decode(ErrorBody.self, from: data)
             throw APIError(status: status, code: e?.code, message: e?.error ?? HTTPURLResponse.localizedString(forStatusCode: status))
         }
-        return try JSONDecoder.api.decode(T.self, from: data)
+        let value = try JSONDecoder.api.decode(T.self, from: data)
+        if let cacheKey { ResponseCache.write(data, cacheKey) }
+        return value
+    }
+}
+
+/// Responses kept in the Caches directory (#82), so the app opens on the
+/// last known data instead of spinners. Cleared on sign-out.
+enum ResponseCache {
+    private static let dir = URL.cachesDirectory.appending(path: "api", directoryHint: .isDirectory)
+
+    private static func file(_ key: String) -> URL {
+        dir.appending(path: (key.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? key) + ".json")
+    }
+
+    static func read<T: Decodable>(_ key: String) -> T? {
+        guard let data = try? Data(contentsOf: file(key)) else { return nil }
+        return try? JSONDecoder.api.decode(T.self, from: data)
+    }
+
+    static func write(_ data: Data, _ key: String) {
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try? data.write(to: file(key), options: .atomic)
+    }
+
+    static func clear() {
+        try? FileManager.default.removeItem(at: dir)
     }
 }
 
