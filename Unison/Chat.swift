@@ -80,10 +80,15 @@ struct ChatView: View {
                                 MessageRow(message: m, author: chat.people[m.authorId], actions: actions)
                                 let replies = chat.replies(to: m.id)
                                 NavigationLink(value: m.id) {
-                                    Label(replies.isEmpty ? "Reply" : replies.count == 1 ? "1 reply" : "\(replies.count) replies",
-                                          systemImage: "arrowshape.turn.up.left")
-                                        .font(.footnote.weight(.medium))
+                                    if replies.isEmpty {
+                                        Label("Reply", systemImage: "arrowshape.turn.up.left")
+                                            .font(.footnote.weight(.medium))
+                                    } else {
+                                        ThreadSummary(replies: replies, people: chat.people)
+                                    }
                                 }
+                                .buttonStyle(.plain)
+                                .foregroundStyle(.tint)
                                 .padding(.leading, 44)
                             }
                         }
@@ -109,6 +114,41 @@ struct ChatView: View {
         .task(id: "\(app.selectedID ?? "")-\(app.revision("message"))-\(app.revision("participant"))") {
             await chat.load(app)
         }
+    }
+}
+
+/// Under a message with replies, as on the web (#87): who replied, how many
+/// replies, and when the last one came. Tapping it opens the thread.
+struct ThreadSummary: View {
+    let replies: [Message]
+    let people: [Int64: Participant]
+
+    var body: some View {
+        let authors = replies.map(\.authorId).reduce(into: [Int64]()) { if !$0.contains($1) { $0.append($1) } }
+        HStack(spacing: 8) {
+            HStack(spacing: -4) {
+                ForEach(authors.prefix(4), id: \.self) { id in
+                    Text(people[id]?.emoji ?? "👤")
+                        .font(.caption)
+                        .frame(width: 22, height: 22)
+                        .background(.fill.secondary, in: Circle())
+                }
+            }
+            Text(replies.count == 1 ? "1 reply" : "\(replies.count) replies")
+                .font(.footnote.weight(.semibold))
+            if let last = replies.last {
+                Text("Last reply \(last.date, format: .relative(presentation: .named))")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Image(systemName: "chevron.right")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(.fill.tertiary, in: Capsule())
     }
 }
 
