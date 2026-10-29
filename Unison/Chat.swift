@@ -99,10 +99,15 @@ struct ThreadView: View {
     let actions: ActionsModel
     let parentID: Int64
 
+    /// Whether the chat was reloaded to find the thread's message.
+    @State private var reloaded = false
+
+    private var parent: Message? { chat.messages.first { $0.id == parentID } }
+
     var body: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 16) {
-                if let parent = chat.messages.first(where: { $0.id == parentID }) {
+                if let parent {
                     MessageRow(message: parent, author: chat.people[parent.authorId], actions: actions)
                     Divider()
                 }
@@ -115,8 +120,21 @@ struct ThreadView: View {
         .defaultScrollAnchor(.bottom)
         .navigationTitle("Thread")
         .navigationBarTitleDisplayMode(.inline)
-        // Opened straight from a notification, the chat may not be loaded yet.
-        .task { if !chat.loaded { await chat.load(app) } }
+        .overlay {
+            if parent == nil {
+                if reloaded {
+                    ContentUnavailableView("Message not found", systemImage: "bubble.left.and.exclamationmark.bubble.right")
+                } else {
+                    ProgressView()
+                }
+            }
+        }
+        // Opened straight from a notification, the chat may not be loaded yet,
+        // or not have the new message.
+        .task(id: parentID) {
+            if parent == nil { await chat.load(app) }
+            reloaded = true
+        }
         .safeAreaInset(edge: .bottom) {
             Composer(placeholder: "Reply") { body, _ in await chat.send(body, parent: parentID, app: app) }
         }

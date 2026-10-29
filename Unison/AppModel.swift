@@ -158,12 +158,21 @@ final class AppModel {
 
     // MARK: Live updates
 
-    func revision(_ kind: String) -> Int { revisions[kind, default: 0] }
+    func revision(_ kind: String) -> Int { revisions[kind, default: 0] + catchUps }
+
+    /// Bumped to make every screen refetch, after events may have been missed.
+    private var catchUps = 0
+    /// The workspace whose stream was followed last.
+    private var streamedWorkspace: Workspace.ID?
 
     /// Follows the selected workspace's event stream until cancelled,
     /// reconnecting with backoff. Each event bumps its kind's revision.
     func followEvents() async {
         guard let token, let ws = selected else { return }
+        // Following again (back in the foreground): catch up on what came
+        // while the stream was down, such as the message of a tapped push.
+        if streamedWorkspace == ws.id { catchUps += 1 }
+        streamedWorkspace = ws.id
         var backoff: Duration = .seconds(1)
         while !Task.isCancelled {
             log.info("stream: connecting to \(ws.id, privacy: .public)")
@@ -186,7 +195,7 @@ final class AppModel {
             try? await Task.sleep(for: backoff)
             backoff = min(backoff * 2, .seconds(30))
             // Catch up on anything missed while disconnected.
-            for kind in revisions.keys { revisions[kind, default: 0] += 1 }
+            catchUps += 1
         }
     }
 
