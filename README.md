@@ -24,3 +24,12 @@ Run a server in open mode (`UNISON_AUTH=off unison serve`), join with a
 participant via the API, and launch a debug build with `UNISON_SERVER`,
 `UNISON_TOKEN` (the participant token) and `UNISON_WORKSPACE`. This skips
 GitHub sign-in. `UNISON_TAB` and `UNISON_ITEM` open a tab or a backlog item.
+
+## Releasing
+
+Each upload to App Store Connect needs a higher build number: bump
+`CURRENT_PROJECT_VERSION` (and `MARKETING_VERSION` for a new release) in
+the project's build settings first. `Unison/PrivacyInfo.xcprivacy` is the
+privacy manifest. Keep it, and the App Privacy answers in App Store Connect,
+consistent with the privacy policy at `/privacy-policy`. The app only uses
+standard HTTPS, so `ITSAppUsesNonExemptEncryption` is `NO` in `Info.plist`.
