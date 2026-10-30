@@ -65,6 +65,23 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         Task { await model.registerDevice(hex) }
     }
 
+    /// A silent push (#122): chat was read elsewhere up to `read_up_to`, so
+    /// clear the notifications for those messages.
+    func application(_ application: UIApplication, didReceiveRemoteNotification userInfo: [AnyHashable: Any],
+                     fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void) {
+        guard userInfo["kind"] as? String == "read", let ws = userInfo["workspace_id"] as? String,
+              let upTo = (userInfo["read_up_to"] as? NSNumber)?.int64Value else {
+            completionHandler(.noData)
+            return
+        }
+        log.info("read: push for \(ws, privacy: .public) up to \(upTo)")
+        nonisolated(unsafe) let done = completionHandler
+        Task {
+            await ReadMarker.clear(workspace: ws, upTo: upTo)
+            done(.newData)
+        }
+    }
+
     func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
         log.error("push: registration failed: \(error.localizedDescription, privacy: .public)")
     }

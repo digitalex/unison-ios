@@ -27,6 +27,8 @@ final class ChatModel {
             let (m, p) = try await (msgs, ppl)
             show(m, p)
             loaded = true
+            // Loaded for the chat screen, so you've seen these (#122).
+            if let newest = m.map(\.id).max() { await app.markRead(upTo: newest) }
         } catch {
             app.handle(error)
         }
