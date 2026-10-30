@@ -11,6 +11,9 @@ struct BacklogItem: Decodable, Identifiable, Sendable {
     let commentCount: Int
     /// The recurring task that added this item, if any (#112).
     var scheduleId: Int64? = nil
+    var leaseExpiresAt: Int64? = nil
+    var updatedAt: Int64? = nil
+    var closedAt: Int64? = nil
 
     struct PR: Decodable, Identifiable, Sendable {
         let id: Int64
@@ -115,6 +118,7 @@ struct BacklogView: View {
 
     var body: some View {
         @Bindable var backlog = backlog
+        // The quiet list (#129): In progress, then Up next, in priority order.
         List {
             Picker("Show", selection: $backlog.filter) {
                 ForEach(BacklogModel.Filter.allCases) { Text($0.rawValue).tag($0) }
@@ -127,10 +131,11 @@ struct BacklogView: View {
                                        systemImage: "list.number")
                     .listRowSeparator(.hidden)
             }
-            ForEach(backlog.items) { item in
-                NavigationLink(value: item.id) {
-                    BacklogRow(item: item, assignee: item.assigneeId.flatMap { backlog.people[$0] })
-                }
+            if backlog.filter == .done {
+                rows(backlog.items)
+            } else {
+                section("In progress", backlog.items.filter { $0.status == "assigned" })
+                section("Up next", backlog.items.filter { $0.status == "open" })
             }
         }
         .listStyle(.plain)
@@ -139,10 +144,10 @@ struct BacklogView: View {
         .navigationDestination(for: Int64.self) { id in
             ItemDetailView(itemID: id, backlog: backlog)
         }
-        .safeAreaInset(edge: .bottom) {
-            Button("New item", systemImage: "plus") { adding = true }
-                .buttonStyle(.borderedProminent)
-                .padding(.bottom, 8)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("New item", systemImage: "plus") { adding = true }
+            }
         }
         .sheet(isPresented: $adding) {
             ItemSheet(backlog: backlog)
@@ -151,45 +156,103 @@ struct BacklogView: View {
             await backlog.load(app)
         }
     }
+
+    @ViewBuilder
+    private func section(_ title: String, _ items: [BacklogItem]) -> some View {
+        if !items.isEmpty {
+            Section {
+                rows(items)
+            } header: {
+                Text("\(title) · \(items.count)")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func rows(_ items: [BacklogItem]) -> some View {
+        ForEach(items) { item in
+            NavigationLink(value: item.id) {
+                BacklogRow(item: item, assignee: item.assigneeId.flatMap { backlog.people[$0] })
+            }
+        }
+    }
 }
 
+/// A quiet backlog row (#129): exactly two lines (the title, then the
+/// number and when), with the counts and the assignee's avatar on the right.
 struct BacklogRow: View {
     let item: BacklogItem
     let assignee: Participant?
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Text("#\(item.id)")
-                .font(.subheadline.monospacedDigit())
-                .foregroundStyle(.secondary)
-            VStack(alignment: .leading, spacing: 4) {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
                 Text(item.title)
-                HStack(spacing: 6) {
+                    .lineLimit(1)
+                HStack(spacing: 4) {
+                    Text("#\(item.id)").monospacedDigit()
                     if item.scheduleId != nil {
                         Image(systemName: "repeat").accessibilityLabel("Recurring")
                     }
-                    if let assignee {
-                        Text("\(assignee.emoji) \(assignee.name)")
-                    }
-                    if !item.prs.isEmpty {
-                        count(item.prs.count, systemImage: "arrow.triangle.pull")
-                    }
-                    if item.commentCount > 0 {
-                        count(item.commentCount, systemImage: "bubble")
+                    if let when {
+                        Text("·")
+                        Text(when)
                     }
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
+            }
+            Spacer(minLength: 4)
+            HStack(spacing: 10) {
+                if !item.prs.isEmpty {
+                    count(item.prs.count, systemImage: "arrow.triangle.pull", label: "pull requests")
+                }
+                if item.commentCount > 0 {
+                    count(item.commentCount, systemImage: "bubble", label: "comments")
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            if let assignee {
+                Text(assignee.emoji)
+                    .font(.callout)
+                    .frame(width: 28, height: 28)
+                    .background(.quaternary, in: Circle())
+                    .accessibilityLabel("Assigned to \(assignee.name)")
             }
         }
         .padding(.vertical, 2)
     }
 
-    private func count(_ n: Int, systemImage: String) -> some View {
+    /// The second line's time: the lease left on work in progress, when a
+    /// done item was closed, or when an open one last changed.
+    private var when: String? {
+        let now = Date()
+        switch item.status {
+        case "assigned":
+            guard let ms = item.leaseExpiresAt else { return nil }
+            let left = Date(timeIntervalSince1970: Double(ms) / 1000).timeIntervalSince(now)
+            return left > 0 ? "\(Duration.seconds(left).formatted(.units(allowed: [.hours, .minutes], width: .narrow, maximumUnitCount: 1))) left" : "lease expiring"
+        case "done":
+            return item.closedAt.map { "closed " + Self.ago($0, now) }
+        default:
+            return item.updatedAt.map { "updated " + Self.ago($0, now) }
+        }
+    }
+
+    private static func ago(_ ms: Int64, _ now: Date) -> String {
+        Date(timeIntervalSince1970: Double(ms) / 1000).formatted(.relative(presentation: .named, unitsStyle: .abbreviated))
+    }
+
+    private func count(_ n: Int, systemImage: String, label: String) -> some View {
         HStack(spacing: 2) {
             Image(systemName: systemImage)
-            Text("\(n)")
+            Text("\(n)").monospacedDigit()
         }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(n) \(label)")
     }
 }
 
