@@ -268,6 +268,8 @@ struct Device: Decodable, Sendable {
 struct NewDevice: Encodable, Sendable {
     let apnsToken: String
     let label: String
+    /// "sandbox" or "production" (#137); nil leaves it to the server.
+    var environment: String? = nil
 }
 
 /// An event from the workspace stream; only its type matters to the app.
