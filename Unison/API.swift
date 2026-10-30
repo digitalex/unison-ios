@@ -208,7 +208,7 @@ struct Message: Decodable, Identifiable, Sendable {
     let body: String
     let createdAt: Int64
     let item: Item?
-    let reactions: [Reaction]?
+    var reactions: [Reaction]?
     /// Set when the message asks the members it @mentions to act.
     var actionRequired: Bool? = nil
 
@@ -220,7 +220,36 @@ struct Message: Decodable, Identifiable, Sendable {
 
     struct Reaction: Decodable, Sendable {
         let emoji: String
-        let count: Int
+        var count: Int
+        /// Who reacted, first first.
+        var by: [Int64]? = nil
+    }
+
+    /// The emoji anyone can put on a message; the server accepts exactly
+    /// these (the web's REACTIONS).
+    static let reactionChoices: [(emoji: String, label: String)] = [
+        ("👍", "Thumbs up"), ("👎", "Thumbs down"), ("❤️", "Heart"), ("💪", "Muscle"), ("💯", "100"),
+    ]
+
+    func reacted(_ emoji: String, by id: Int64) -> Bool {
+        reactions?.contains { $0.emoji == emoji && ($0.by ?? []).contains(id) } ?? false
+    }
+
+    /// The reactions with `id`'s `emoji` on or off. A new emoji goes last,
+    /// as the server orders them.
+    func withReaction(_ emoji: String, by id: Int64, on: Bool) -> [Reaction] {
+        var list = reactions ?? []
+        if let i = list.firstIndex(where: { $0.emoji == emoji }) {
+            var by = list[i].by ?? []
+            guard by.contains(id) != on else { return list }
+            if on { by.append(id) } else { by.removeAll { $0 == id } }
+            list[i].by = by
+            list[i].count += on ? 1 : -1
+            if list[i].count <= 0 { list.remove(at: i) }
+        } else if on {
+            list.append(Reaction(emoji: emoji, count: 1, by: [id]))
+        }
+        return list
     }
 
     /// When it was sent, never in the future (the server's clock may be ahead).
