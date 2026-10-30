@@ -15,6 +15,16 @@ struct BacklogItem: Decodable, Identifiable, Sendable {
     var updatedAt: Int64? = nil
     var closedAt: Int64? = nil
 
+    /// Being worked on (#146): independent of who it's assigned to. Servers
+    /// from before #146 call this "assigned".
+    var inProgress: Bool { status == "in_progress" || status == "assigned" }
+
+    /// The status for people.
+    var statusLabel: String {
+        if inProgress { return "In progress" }
+        return status.capitalized
+    }
+
     struct PR: Decodable, Identifiable, Sendable {
         let id: Int64
         let url: String
@@ -80,11 +90,11 @@ final class BacklogModel {
     }
 
     /// Adds an item at the bottom of the backlog. Returns whether it was added.
-    func add(_ app: AppModel, title: String, body: String) async -> Bool {
+    func add(_ app: AppModel, title: String, body: String, assigneeId: Int64? = nil) async -> Bool {
         guard let token = app.token, let ws = app.selected else { return false }
         do {
             let _: BacklogItem = try await app.api.post("api/workspaces/\(ws.id)/backlog", token: token,
-                                                        body: NewItem(title: title, body: body))
+                                                        body: NewItem(title: title, body: body, assigneeId: assigneeId))
             await load(app)
             return true
         } catch {
@@ -101,9 +111,29 @@ final class BacklogModel {
         }
     }
 
-    /// Assigns an item to you (#130).
+    /// Assigns an item to you (#130), leaving its progress as it is (#146).
     func take(_ app: AppModel, _ id: Int64) async {
         await act(app, "backlog/\(id)/assign", AssignItem())
+    }
+
+    /// Starts work on an item (#146); it's yours if it had no assignee.
+    func start(_ app: AppModel, _ id: Int64) async {
+        await act(app, "backlog/\(id)/start", Empty())
+    }
+
+    /// Assigns an item to someone, leaving its progress as it is (#146).
+    /// Returns the saved item.
+    func assign(_ app: AppModel, _ id: Int64, to: Int64) async -> BacklogItem? {
+        guard let token = app.token, let ws = app.selected else { return nil }
+        do {
+            let it: BacklogItem = try await app.api.post("api/workspaces/\(ws.id)/backlog/\(id)/assign", token: token,
+                                                         body: AssignItem(assigneeId: to))
+            await load(app)
+            return it
+        } catch {
+            app.handle(error)
+            return nil
+        }
     }
 
     /// Marks an item done (#130).
@@ -149,7 +179,9 @@ final class BacklogModel {
 }
 
 /// No assignee means the caller.
-struct AssignItem: Encodable, Sendable {}
+struct AssignItem: Encodable, Sendable {
+    var assigneeId: Int64? = nil
+}
 
 struct CloseItem: Encodable, Sendable {
     var note = ""
@@ -162,6 +194,8 @@ struct MoveItem: Encodable, Sendable {
 struct NewItem: Encodable, Sendable {
     let title: String
     let body: String
+    /// For a new item (#146).
+    var assigneeId: Int64? = nil
 }
 
 struct BacklogView: View {
@@ -195,7 +229,7 @@ struct BacklogView: View {
             if backlog.filter == .done {
                 rows(shown)
             } else {
-                section("In progress", shown.filter { $0.status == "assigned" })
+                section("In progress", shown.filter(\.inProgress))
                 // Reordering only makes sense on the whole queue.
                 section("Up next", shown.filter { $0.status == "open" },
                         movable: backlog.search.isEmpty)
@@ -249,7 +283,12 @@ struct BacklogView: View {
                 BacklogRow(item: item, assignee: item.assigneeId.flatMap { backlog.people[$0] })
             }
             .swipeActions(edge: .leading) {
-                if item.status != "done" && item.assigneeId != me {
+                if item.status == "open" && (item.assigneeId == nil || item.assigneeId == me) {
+                    Button("Start", systemImage: "play") {
+                        Task { await backlog.start(app, item.id) }
+                    }
+                    .tint(.blue)
+                } else if item.status != "done" && item.assigneeId != me {
                     Button("Take it", systemImage: "hand.raised") {
                         Task { await backlog.take(app, item.id) }
                     }
@@ -334,16 +373,15 @@ struct BacklogRow: View {
     /// done item was closed, or when an open one last changed.
     private var when: String? {
         let now = Date()
-        switch item.status {
-        case "assigned":
+        if item.inProgress {
             guard let ms = item.leaseExpiresAt else { return nil }
             let left = Date(timeIntervalSince1970: Double(ms) / 1000).timeIntervalSince(now)
             return left > 0 ? "\(Duration.seconds(left).formatted(.units(allowed: [.hours, .minutes], width: .narrow, maximumUnitCount: 1))) left" : "lease expiring"
-        case "done":
-            return item.closedAt.map { "closed " + Self.ago($0, now) }
-        default:
-            return item.updatedAt.map { "updated " + Self.ago($0, now) }
         }
+        if item.status == "done" {
+            return item.closedAt.map { "closed " + Self.ago($0, now) }
+        }
+        return item.updatedAt.map { "updated " + Self.ago($0, now) }
     }
 
     private static func ago(_ ms: Int64, _ now: Date) -> String {
@@ -379,7 +417,7 @@ struct ItemDetailView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Text(item.title).font(.title3.bold())
                         HStack(spacing: 8) {
-                            Text(item.status.capitalized)
+                            Text(item.statusLabel)
                                 .font(.caption.weight(.semibold))
                                 .padding(.horizontal, 8)
                                 .padding(.vertical, 2)
@@ -491,6 +529,7 @@ struct ItemSheet: View {
     var saved: (BacklogItem) -> Void = { _ in }
     @State private var title = ""
     @State private var details = ""
+    @State private var assigneeId: Int64?
     @State private var saving = false
     @FocusState private var titleFocused: Bool
 
@@ -503,6 +542,15 @@ struct ItemSheet: View {
                     .focused($titleFocused)
                 TextField("Details (optional)", text: $details, axis: .vertical)
                     .lineLimit(4...)
+                Picker("Assignee", selection: $assigneeId) {
+                    // An edit can't clear an assignee yet: see #147.
+                    if item?.assigneeId == nil {
+                        Text("Unassigned").tag(Int64?.none)
+                    }
+                    ForEach(backlog.people.values.sorted { $0.name < $1.name }) { p in
+                        Text("\(p.emoji) \(p.name)").tag(Int64?.some(p.id))
+                    }
+                }
             }
             .navigationTitle(item.map { "Edit #\($0.id)" } ?? "New item")
             .navigationBarTitleDisplayMode(.inline)
@@ -517,10 +565,14 @@ struct ItemSheet: View {
                             let details = details.trimmingCharacters(in: .whitespacesAndNewlines)
                             if let item {
                                 if let it = await backlog.update(app, id: item.id, title: trimmedTitle, body: details) {
-                                    saved(it)
+                                    var latest = it
+                                    if let assigneeId, assigneeId != item.assigneeId {
+                                        latest = await backlog.assign(app, item.id, to: assigneeId) ?? it
+                                    }
+                                    saved(latest)
                                     dismiss()
                                 }
-                            } else if await backlog.add(app, title: trimmedTitle, body: details) {
+                            } else if await backlog.add(app, title: trimmedTitle, body: details, assigneeId: assigneeId) {
                                 dismiss()
                             }
                             saving = false
@@ -533,6 +585,7 @@ struct ItemSheet: View {
                 if let item {
                     title = item.title
                     details = item.body
+                    assigneeId = item.assigneeId
                 } else {
                     titleFocused = true
                 }
