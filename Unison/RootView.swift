@@ -1,3 +1,4 @@
+import AuthenticationServices
 import SwiftUI
 
 struct RootView: View {
@@ -25,6 +26,8 @@ struct RootView: View {
 
 struct SignInView: View {
     @Environment(AppModel.self) private var model
+    @State private var reviewing = false
+    @State private var reviewCode = ""
 
     var body: some View {
         VStack(spacing: 24) {
@@ -43,17 +46,41 @@ struct SignInView: View {
             if model.signingIn {
                 ProgressView()
             } else {
-                Button {
-                    model.signIn()
-                } label: {
-                    Text("Sign in with GitHub")
-                        .frame(maxWidth: .infinity)
+                VStack(spacing: 12) {
+                    SignInWithAppleButton(.signIn) { request in
+                        request.requestedScopes = [.fullName, .email]
+                    } onCompletion: { result in
+                        model.signInWithApple(result)
+                    }
+                    .signInWithAppleButtonStyle(.white)
+                    .frame(height: 55)
+                    .clipShape(.capsule)
+                    Button {
+                        model.signIn()
+                    } label: {
+                        Text("Sign in with GitHub")
+                            .frame(maxWidth: .infinity, minHeight: 26)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    Button("App Review sign-in") {
+                        reviewCode = ""
+                        reviewing = true
+                    }
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
             }
         }
         .padding(24)
+        .alert("App Review sign-in", isPresented: $reviewing) {
+            SecureField("Access code", text: $reviewCode)
+            Button("Cancel", role: .cancel) {}
+            Button("Sign in") { model.signInForReview(code: reviewCode) }
+                .disabled(reviewCode.isEmpty)
+        } message: {
+            Text("Enter the access code from the review notes.")
+        }
         #if DEBUG
         .task { // UNISON_AUTO_SIGN_IN=1 starts sign-in at launch, for testing
             if ProcessInfo.processInfo.environment["UNISON_AUTO_SIGN_IN"] != nil {

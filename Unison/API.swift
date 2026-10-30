@@ -292,6 +292,21 @@ struct AppTokenRequest: Encodable, Sendable {
     let label: String
 }
 
+/// `POST api/auth/apple/native`: a code from the Sign in with Apple button
+/// (#136), and the name Apple gives only the app, only the first time.
+struct AppleSignIn: Encodable, Sendable {
+    let code: String
+    let givenName: String?
+    let familyName: String?
+    let label: String
+}
+
+/// `POST api/auth/review`: App Review's access code (#139).
+struct ReviewSignIn: Encodable, Sendable {
+    let code: String
+    let label: String
+}
+
 struct AppToken: Decodable, Sendable {
     let token: String
 }

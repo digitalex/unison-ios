@@ -89,6 +89,54 @@ final class AppModel {
         }
     }
 
+    /// Finishes Sign in with Apple (#136): the server redeems the button's
+    /// authorization code with Apple and returns a session token.
+    func signInWithApple(_ result: Result<ASAuthorization, Error>) {
+        signInTask?.cancel()
+        error = nil
+        signingIn = true
+        signInTask = Task {
+            defer { signingIn = false }
+            do {
+                let auth = try result.get()
+                guard let cred = auth.credential as? ASAuthorizationAppleIDCredential,
+                      let data = cred.authorizationCode, let code = String(data: data, encoding: .utf8) else {
+                    throw APIError(status: 0, code: nil, message: "Sign-in didn't complete. Try again.")
+                }
+                let res: AppToken = try await api.post("api/auth/apple/native", token: nil, body: AppleSignIn(
+                    code: code, givenName: cred.fullName?.givenName, familyName: cred.fullName?.familyName, label: "iPhone"))
+                Keychain.save(res.token)
+                token = res.token
+            } catch let e as ASAuthorizationError where e.code == .canceled {
+            } catch is CancellationError {
+            } catch {
+                self.error = error.localizedDescription
+            }
+        }
+    }
+
+    /// Signs in to the App Review demo account with the access code from
+    /// the review notes (#139). The server answers 404 unless it's enabled.
+    func signInForReview(code: String) {
+        signInTask?.cancel()
+        error = nil
+        signingIn = true
+        signInTask = Task {
+            defer { signingIn = false }
+            do {
+                let res: AppToken = try await api.post("api/auth/review", token: nil,
+                                                       body: ReviewSignIn(code: code, label: "iPhone (App Review)"))
+                Keychain.save(res.token)
+                token = res.token
+            } catch let e as APIError where e.status == 401 {
+                self.error = "That access code isn't right."
+            } catch is CancellationError {
+            } catch {
+                self.error = error.localizedDescription
+            }
+        }
+    }
+
     /// Runs the browser sheet until the server redirects to `unison://…`.
     private func authenticate(_ url: URL) async throws -> URL {
         try await withCheckedThrowingContinuation { continuation in
