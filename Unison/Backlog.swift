@@ -121,13 +121,18 @@ final class BacklogModel {
         await act(app, "backlog/\(id)/start", Empty())
     }
 
-    /// Assigns an item to someone, leaving its progress as it is (#146).
-    /// Returns the saved item.
-    func assign(_ app: AppModel, _ id: Int64, to: Int64) async -> BacklogItem? {
+    /// Moves an item back to Up next (#146); it keeps its assignee.
+    func stop(_ app: AppModel, _ id: Int64) async {
+        await act(app, "backlog/\(id)/stop", Empty())
+    }
+
+    /// Assigns an item to someone, or to nobody (nil), leaving its progress
+    /// as it is (#146). Returns the saved item.
+    func assign(_ app: AppModel, _ id: Int64, to: Int64?) async -> BacklogItem? {
         guard let token = app.token, let ws = app.selected else { return nil }
         do {
             let it: BacklogItem = try await app.api.post("api/workspaces/\(ws.id)/backlog/\(id)/assign", token: token,
-                                                         body: AssignItem(assigneeId: to))
+                                                         body: AssignItem(assigneeId: to ?? 0))
             await load(app)
             return it
         } catch {
@@ -178,7 +183,7 @@ final class BacklogModel {
     }
 }
 
-/// No assignee means the caller.
+/// No assignee means the caller; 0 means nobody.
 struct AssignItem: Encodable, Sendable {
     var assigneeId: Int64? = nil
 }
@@ -293,6 +298,12 @@ struct BacklogView: View {
                         Task { await backlog.take(app, item.id) }
                     }
                     .tint(.blue)
+                }
+                if item.inProgress {
+                    Button("Stop", systemImage: "pause") {
+                        Task { await backlog.stop(app, item.id) }
+                    }
+                    .tint(.orange)
                 }
             }
             .swipeActions(edge: .trailing) {
@@ -543,10 +554,7 @@ struct ItemSheet: View {
                 TextField("Details (optional)", text: $details, axis: .vertical)
                     .lineLimit(4...)
                 Picker("Assignee", selection: $assigneeId) {
-                    // An edit can't clear an assignee yet: see #147.
-                    if item?.assigneeId == nil {
-                        Text("Unassigned").tag(Int64?.none)
-                    }
+                    Text("Unassigned").tag(Int64?.none)
                     ForEach(backlog.people.values.sorted { $0.name < $1.name }) { p in
                         Text("\(p.emoji) \(p.name)").tag(Int64?.some(p.id))
                     }
@@ -566,7 +574,7 @@ struct ItemSheet: View {
                             if let item {
                                 if let it = await backlog.update(app, id: item.id, title: trimmedTitle, body: details) {
                                     var latest = it
-                                    if let assigneeId, assigneeId != item.assigneeId {
+                                    if assigneeId != item.assigneeId {
                                         latest = await backlog.assign(app, item.id, to: assigneeId) ?? it
                                     }
                                     saved(latest)
