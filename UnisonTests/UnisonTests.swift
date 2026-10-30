@@ -130,3 +130,27 @@ struct ReactionTests {
         #expect(message(nil).withReaction("👎", by: 1, on: false).isEmpty)
     }
 }
+
+struct PushEnvironmentTests {
+    private func profile(_ aps: String?) -> Data {
+        let entitlements = aps.map { "<key>aps-environment</key><string>\($0)</string>" } ?? ""
+        // A provisioning profile is CMS-signed binary around the plist.
+        return Data([0x30, 0x82, 0x01]) + Data("""
+        <?xml version="1.0" encoding="UTF-8"?>
+        <plist version="1.0"><dict><key>Entitlements</key><dict>\(entitlements)</dict></dict></plist>
+        """.utf8) + Data([0xA0, 0x00])
+    }
+
+    @Test func developmentProfileMeansSandbox() {
+        #expect(PushEnvironment.environment(inProfile: profile("development")) == "sandbox")
+    }
+
+    @Test func productionProfile() {
+        #expect(PushEnvironment.environment(inProfile: profile("production")) == "production")
+    }
+
+    @Test func noPushEntitlementOrNoPlist() {
+        #expect(PushEnvironment.environment(inProfile: profile(nil)) == nil)
+        #expect(PushEnvironment.environment(inProfile: Data([1, 2, 3])) == nil)
+    }
+}

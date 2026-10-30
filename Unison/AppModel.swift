@@ -242,7 +242,8 @@ final class AppModel {
         guard let token, token.hasPrefix("us_") else { return }
         do {
             let _: Device = try await api.post("api/me/devices", token: token,
-                                               body: NewDevice(apnsToken: apnsToken, label: "iPhone"))
+                                               body: NewDevice(apnsToken: apnsToken, label: "iPhone",
+                                                               environment: PushEnvironment.current))
             log.info("push: device registered")
         } catch {
             log.error("push: device registration failed: \(error.localizedDescription, privacy: .public)")
