@@ -43,8 +43,6 @@ final class BacklogModel {
     }
 
     var filter = Filter.active
-    /// Only items assigned to you (#130).
-    var mine = false
     /// Filters titles on the device (#130).
     var search = ""
     private(set) var items: [BacklogItem] = []
@@ -95,12 +93,11 @@ final class BacklogModel {
         }
     }
 
-    /// The items shown: `items` narrowed by Mine and the search text.
-    func shown(_ me: Int64?) -> [BacklogItem] {
+    /// The items shown: `items` narrowed by the search text.
+    var shown: [BacklogItem] {
         let q = search.trimmingCharacters(in: .whitespaces)
         return items.filter { item in
-            (!mine || (me != nil && item.assigneeId == me))
-                && (q.isEmpty || item.title.localizedCaseInsensitiveContains(q) || "#\(item.id)" == q || "\(item.id)" == q)
+            q.isEmpty || item.title.localizedCaseInsensitiveContains(q) || "#\(item.id)" == q || "\(item.id)" == q
         }
     }
 
@@ -185,7 +182,7 @@ struct BacklogView: View {
             .pickerStyle(.segmented)
             .listRowSeparator(.hidden)
 
-            let shown = backlog.shown(me)
+            let shown = backlog.shown
             if backlog.loaded && shown.isEmpty {
                 if !backlog.search.isEmpty {
                     ContentUnavailableView.search(text: backlog.search)
@@ -201,7 +198,7 @@ struct BacklogView: View {
                 section("In progress", shown.filter { $0.status == "assigned" })
                 // Reordering only makes sense on the whole queue.
                 section("Up next", shown.filter { $0.status == "open" },
-                        movable: !backlog.mine && backlog.search.isEmpty)
+                        movable: backlog.search.isEmpty)
             }
         }
         .searchable(text: $backlog.search, prompt: "Search titles")
@@ -211,17 +208,10 @@ struct BacklogView: View {
         .navigationDestination(for: Int64.self) { id in
             ItemDetailView(itemID: id, backlog: backlog)
         }
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                Toggle(isOn: $backlog.mine) {
-                    Label("Mine", systemImage: backlog.mine ? "person.fill" : "person")
-                }
-                .toggleStyle(.button)
-                .disabled(me == nil)
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button("New item", systemImage: "plus") { adding = true }
-            }
+        .safeAreaInset(edge: .bottom) {
+            Button("New item", systemImage: "plus") { adding = true }
+                .buttonStyle(.borderedProminent)
+                .padding(.bottom, 8)
         }
         .sheet(isPresented: $adding) {
             ItemSheet(backlog: backlog)
@@ -235,8 +225,7 @@ struct BacklogView: View {
     }
 
     private var empty: String {
-        if backlog.mine { return backlog.filter == .done ? "Nothing of yours done yet" : "Nothing assigned to you" }
-        return backlog.filter == .done ? "Nothing done yet" : "The backlog is empty"
+        backlog.filter == .done ? "Nothing done yet" : "The backlog is empty"
     }
 
     @ViewBuilder
