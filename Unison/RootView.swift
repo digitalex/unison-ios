@@ -161,6 +161,10 @@ struct MainView: View {
         .task(id: scenePhase == .active ? model.participant?.id : nil) {
             if scenePhase == .active, model.participant != nil { await model.followEvents() }
         }
+        // Clear notifications for chat you've read elsewhere since (#122).
+        .task(id: scenePhase == .active && !model.workspaces.isEmpty) {
+            if scenePhase == .active { await model.clearReadNotifications() }
+        }
     }
 
     @Environment(\.scenePhase) private var scenePhase

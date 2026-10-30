@@ -81,3 +81,23 @@ struct MessageTests {
         #expect(Route(url: urls[1])?.workspaceID == "ws_1")
     }
 }
+
+struct ReadMarkerTests {
+    private func payload(_ ws: String, message: Int64?, kind: String = "mention") -> [AnyHashable: Any] {
+        var p: [AnyHashable: Any] = ["workspace_id": ws, "kind": kind]
+        if let message { p["message_id"] = NSNumber(value: message) }
+        return p
+    }
+
+    @Test func coversChatMessagesUpToTheMarker() {
+        #expect(ReadMarker.covers(payload("ws_1", message: 40), workspace: "ws_1", upTo: 42))
+        #expect(ReadMarker.covers(payload("ws_1", message: 42, kind: "action"), workspace: "ws_1", upTo: 42))
+        #expect(!ReadMarker.covers(payload("ws_1", message: 43), workspace: "ws_1", upTo: 42))
+    }
+
+    @Test func leavesOtherWorkspacesAndComments() {
+        #expect(!ReadMarker.covers(payload("ws_2", message: 40), workspace: "ws_1", upTo: 42))
+        #expect(!ReadMarker.covers(payload("ws_1", message: 40, kind: "comment_mention"), workspace: "ws_1", upTo: 42))
+        #expect(!ReadMarker.covers(payload("ws_1", message: nil, kind: "comment_mention"), workspace: "ws_1", upTo: 42))
+    }
+}

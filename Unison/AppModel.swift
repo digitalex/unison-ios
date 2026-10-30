@@ -32,6 +32,8 @@ final class AppModel {
     var selected: Workspace? { workspaces.first { $0.id == selectedID } }
 
     let api = API(base: API.server)
+    /// How far chat is read, per workspace, as far as this app knows (#122).
+    var readUpTo: [String: Int64] = [:]
     private let presenter = AuthPresenter()
     private var signInTask: Task<Void, Never>?
 
