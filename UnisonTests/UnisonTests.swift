@@ -101,3 +101,32 @@ struct ReadMarkerTests {
         #expect(!ReadMarker.covers(payload("ws_1", message: nil, kind: "comment_mention"), workspace: "ws_1", upTo: 42))
     }
 }
+
+struct ReactionTests {
+    private func message(_ reactions: [Message.Reaction]?) -> Message {
+        Message(id: 1, authorId: 1, parentId: nil, body: "hi", createdAt: 0, item: nil, reactions: reactions)
+    }
+
+    @Test func addsANewEmojiLast() {
+        let m = message([.init(emoji: "👍", count: 1, by: [2])])
+        let r = m.withReaction("❤️", by: 1, on: true)
+        #expect(r.map(\.emoji) == ["👍", "❤️"])
+        #expect(r[1].by == [1])
+    }
+
+    @Test func joinsAndLeavesAnExistingEmoji() {
+        let m = message([.init(emoji: "👍", count: 1, by: [2])])
+        let on = m.withReaction("👍", by: 1, on: true)
+        #expect(on[0].count == 2 && on[0].by == [2, 1])
+        #expect(message(on).reacted("👍", by: 1))
+        let off = message(on).withReaction("👍", by: 1, on: false)
+        #expect(off[0].count == 1 && off[0].by == [2])
+    }
+
+    @Test func dropsAnEmptyEmojiAndIgnoresRepeats() {
+        let m = message([.init(emoji: "💯", count: 1, by: [1])])
+        #expect(m.withReaction("💯", by: 1, on: false).isEmpty)
+        #expect(m.withReaction("💯", by: 1, on: true)[0].count == 1)
+        #expect(message(nil).withReaction("👎", by: 1, on: false).isEmpty)
+    }
+}

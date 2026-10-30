@@ -54,6 +54,28 @@ final class ChatModel {
         }
     }
 
+    /// Toggles your `emoji` on a message (#133), showing it at once and
+    /// taking it back if the server refuses.
+    func react(_ emoji: String, on id: Int64, app: AppModel) async {
+        guard let token = app.token, let ws = app.selected, let me = app.participant?.id,
+              let i = messages.firstIndex(where: { $0.id == id }) else { return }
+        let on = !messages[i].reacted(emoji, by: me)
+        set(id) { $0.reactions = $0.withReaction(emoji, by: me, on: on) }
+        let path = "api/workspaces/\(ws.id)/messages/\(id)/reactions/\(emoji.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? emoji)"
+        do {
+            let m: Message = on ? try await app.api.put(path, token: token, body: Empty())
+                                : try await app.api.delete(path, token: token)
+            set(id) { $0.reactions = m.reactions }
+        } catch {
+            set(id) { $0.reactions = $0.withReaction(emoji, by: me, on: !on) }
+            app.handle(error)
+        }
+    }
+
+    private func set(_ id: Int64, _ change: (inout Message) -> Void) {
+        if let i = messages.firstIndex(where: { $0.id == id }) { change(&messages[i]) }
+    }
+
     var topLevel: [Message] { messages.filter { $0.parentId == nil } }
 
     func replies(to id: Int64) -> [Message] { messages.filter { $0.parentId == id } }
@@ -81,7 +103,7 @@ struct ChatView: View {
                     LazyVStack(alignment: .leading, spacing: 16) {
                         ForEach(chat.topLevel) { m in
                             VStack(alignment: .leading, spacing: 6) {
-                                MessageRow(message: m, author: chat.people[m.authorId], actions: actions)
+                                MessageRow(message: m, author: chat.people[m.authorId], actions: actions, chat: chat)
                                 let replies = chat.replies(to: m.id)
                                 NavigationLink(value: m.id) {
                                     if replies.isEmpty {
@@ -201,11 +223,11 @@ struct ThreadView: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 16) {
                 if let parent {
-                    MessageRow(message: parent, author: chat.people[parent.authorId], actions: actions)
+                    MessageRow(message: parent, author: chat.people[parent.authorId], actions: actions, chat: chat)
                     Divider()
                 }
                 ForEach(chat.replies(to: parentID)) { m in
-                    MessageRow(message: m, author: chat.people[m.authorId], actions: actions)
+                    MessageRow(message: m, author: chat.people[m.authorId], actions: actions, chat: chat)
                 }
             }
             .padding()
@@ -239,14 +261,67 @@ struct MessageRow: View {
     let message: Message
     let author: Participant?
     var actions: ActionsModel? = nil
+    /// Set where you can react: long-press for the emoji, tap a chip to toggle it (#133).
+    var chat: ChatModel? = nil
+    @State private var picking = false
 
     private var needsMe: Bool { actions?.needsMe(message.id) ?? false }
+    private var me: Int64? { app.participant?.id }
 
     var body: some View {
         content
             .padding(needsMe ? 10 : 0)
             .background(needsMe ? AnyShapeStyle(.orange.opacity(0.12)) : AnyShapeStyle(.clear),
                         in: RoundedRectangle(cornerRadius: 12))
+            .contentShape(Rectangle())
+            .onLongPressGesture(minimumDuration: 0.4) {
+                guard chat != nil, me != nil else { return }
+                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                picking = true
+            }
+            .popover(isPresented: $picking, attachmentAnchor: .rect(.bounds), arrowEdge: .bottom) {
+                picker.presentationCompactAdaptation(.popover)
+            }
+    }
+
+    /// The emoji bar a long press brings up, plus Copy (the long press
+    /// takes the place of text selection).
+    private var picker: some View {
+        HStack(spacing: 4) {
+            ForEach(Message.reactionChoices, id: \.emoji) { choice in
+                let mine = me.map { message.reacted(choice.emoji, by: $0) } ?? false
+                Button {
+                    picking = false
+                    react(choice.emoji)
+                } label: {
+                    Text(choice.emoji)
+                        .font(.title2)
+                        .frame(width: 44, height: 44)
+                        .background(mine ? AnyShapeStyle(.tint.opacity(0.25)) : AnyShapeStyle(.clear), in: Circle())
+                }
+                .accessibilityLabel(choice.label)
+                .accessibilityAddTraits(mine ? .isSelected : [])
+            }
+            Divider().frame(height: 28)
+            Button {
+                UIPasteboard.general.string = message.body
+                picking = false
+            } label: {
+                Image(systemName: "doc.on.doc").frame(width: 44, height: 44)
+            }
+            .accessibilityLabel("Copy text")
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 6)
+    }
+
+    private var bodyText: some View {
+        Text(richText(message.body, workspace: app.selectedID)).font(.body)
+    }
+
+    private func react(_ emoji: String) {
+        guard let chat else { return }
+        Task { await chat.react(emoji, on: message.id, app: app) }
     }
 
     private var content: some View {
@@ -299,17 +374,28 @@ struct MessageRow: View {
                         .background(.tint.opacity(0.12), in: Capsule())
                         .foregroundStyle(.tint)
                 }
-                Text(richText(message.body, workspace: app.selectedID))
-                    .font(.body)
-                    .textSelection(.enabled)
+                // In chat a long press reacts (with Copy), so select only elsewhere.
+                if chat == nil {
+                    bodyText.textSelection(.enabled)
+                } else {
+                    bodyText
+                }
                 if let reactions = message.reactions, !reactions.isEmpty {
                     HStack(spacing: 6) {
                         ForEach(reactions, id: \.emoji) { r in
-                            Text("\(r.emoji) \(r.count)")
-                                .font(.caption)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 3)
-                                .background(.fill.tertiary, in: Capsule())
+                            let mine = me.map { (r.by ?? []).contains($0) } ?? false
+                            Button { react(r.emoji) } label: {
+                                Text("\(r.emoji) \(r.count)")
+                                    .font(.caption.monospacedDigit())
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 3)
+                                    .background(mine ? AnyShapeStyle(.tint.opacity(0.2)) : AnyShapeStyle(.fill.tertiary), in: Capsule())
+                                    .overlay { if mine { Capsule().strokeBorder(.tint.opacity(0.6)) } }
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(chat == nil)
+                            .accessibilityLabel("\(Message.reactionChoices.first { $0.emoji == r.emoji }?.label ?? r.emoji), \(r.count)")
+                            .accessibilityAddTraits(mine ? .isSelected : [])
                         }
                     }
                 }
