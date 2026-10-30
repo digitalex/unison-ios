@@ -87,6 +87,20 @@ final class BacklogModel {
             return false
         }
     }
+
+    /// Changes an item's title and details (#123). Returns the saved item.
+    func update(_ app: AppModel, id: Int64, title: String, body: String) async -> BacklogItem? {
+        guard let token = app.token, let ws = app.selected else { return nil }
+        do {
+            let it: BacklogItem = try await app.api.patch("api/workspaces/\(ws.id)/backlog/\(id)", token: token,
+                                                          body: NewItem(title: title, body: body))
+            await load(app)
+            return it
+        } catch {
+            app.handle(error)
+            return nil
+        }
+    }
 }
 
 struct NewItem: Encodable, Sendable {
@@ -131,7 +145,7 @@ struct BacklogView: View {
                 .padding(.bottom, 8)
         }
         .sheet(isPresented: $adding) {
-            NewItemSheet(backlog: backlog)
+            ItemSheet(backlog: backlog)
         }
         .task(id: "\(app.selectedID ?? "")-\(backlog.filter)-\(app.revision("backlog"))-\(app.revision("pr"))-\(app.revision("comment"))") {
             await backlog.load(app)
@@ -189,6 +203,7 @@ struct ItemDetailView: View {
 
     @State private var item: BacklogItem?
     @State private var comments: [Comment] = []
+    @State private var editing = false
 
     var body: some View {
         List {
@@ -241,6 +256,18 @@ struct ItemDetailView: View {
         .overlay { if item == nil { ProgressView() } }
         .navigationTitle("#\(itemID)")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if item != nil {
+                ToolbarItem(placement: .primaryAction) {
+                    Button("Edit") { editing = true }
+                }
+            }
+        }
+        .sheet(isPresented: $editing) {
+            if let item {
+                ItemSheet(backlog: backlog, item: item) { self.item = $0 }
+            }
+        }
         .safeAreaInset(edge: .bottom) {
             if item != nil {
                 Composer(placeholder: "Add a comment") { await addComment($0) }
@@ -287,11 +314,14 @@ struct NewComment: Encodable, Sendable {
     let body: String
 }
 
-/// Adds a backlog item: a title and optional details.
-struct NewItemSheet: View {
+/// Adds a backlog item (item nil) or edits one: a title and optional details.
+struct ItemSheet: View {
     @Environment(AppModel.self) private var app
     @Environment(\.dismiss) private var dismiss
     let backlog: BacklogModel
+    var item: BacklogItem? = nil
+    /// Gets the item once an edit is saved.
+    var saved: (BacklogItem) -> Void = { _ in }
     @State private var title = ""
     @State private var details = ""
     @State private var saving = false
@@ -307,26 +337,40 @@ struct NewItemSheet: View {
                 TextField("Details (optional)", text: $details, axis: .vertical)
                     .lineLimit(4...)
             }
-            .navigationTitle("New item")
+            .navigationTitle(item.map { "Edit #\($0.id)" } ?? "New item")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Add") {
+                    Button(item == nil ? "Add" : "Save") {
                         saving = true
                         Task {
                             let details = details.trimmingCharacters(in: .whitespacesAndNewlines)
-                            if await backlog.add(app, title: trimmedTitle, body: details) { dismiss() }
+                            if let item {
+                                if let it = await backlog.update(app, id: item.id, title: trimmedTitle, body: details) {
+                                    saved(it)
+                                    dismiss()
+                                }
+                            } else if await backlog.add(app, title: trimmedTitle, body: details) {
+                                dismiss()
+                            }
                             saving = false
                         }
                     }
                     .disabled(trimmedTitle.isEmpty || saving)
                 }
             }
-            .onAppear { titleFocused = true }
+            .onAppear {
+                if let item {
+                    title = item.title
+                    details = item.body
+                } else {
+                    titleFocused = true
+                }
+            }
         }
-        .presentationDetents([.medium, .large])
+        .presentationDetents(item == nil ? [.medium, .large] : [.large])
     }
 }
