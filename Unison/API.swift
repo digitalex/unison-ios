@@ -45,6 +45,10 @@ struct API: Sendable {
         try await send("DELETE", path, token: token, body: Optional<Empty>.none)
     }
 
+    func delete<T: Decodable>(_ path: String, token: String?, body: some Encodable) async throws -> T {
+        try await send("DELETE", path, token: token, body: body)
+    }
+
     /// Follows the workspace's Server-Sent Events stream, calling `onEvent`
     /// for each event until the connection ends or the task is cancelled.
     @MainActor

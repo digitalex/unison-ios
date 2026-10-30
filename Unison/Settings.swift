@@ -81,6 +81,8 @@ final class SettingsModel {
 struct SettingsView: View {
     @Environment(AppModel.self) private var model
     @State private var settings = SettingsModel()
+    @State private var confirmingDeletion = false
+    @State private var deleting = false
 
     var body: some View {
         List {
@@ -153,6 +155,34 @@ struct SettingsView: View {
                     Task { await model.signOut() }
                 }
                 .frame(maxWidth: .infinity)
+            }
+
+            Section {
+                Button(role: .destructive) {
+                    confirmingDeletion = true
+                } label: {
+                    if deleting {
+                        HStack { ProgressView(); Text("Deleting…") }
+                    } else {
+                        Text("Delete account")
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .disabled(deleting)
+            } footer: {
+                Text("Deletes your account, sign-ins and devices, and any workspace only you are in. In shared workspaces what you posted stays, shown as from a deleted user.")
+            }
+            .alert("Delete your account?", isPresented: $confirmingDeletion) {
+                Button("Delete account", role: .destructive) {
+                    deleting = true
+                    Task {
+                        _ = await model.deleteAccount()
+                        deleting = false
+                    }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("This can't be undone. Workspaces only you are in are deleted, and your agents stop working.")
             }
         }
         .task(id: "\(model.selectedID ?? "")-\(model.revision("participant"))-\(model.revision("workspace"))-\(model.revision("repo"))") {

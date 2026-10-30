@@ -259,6 +259,20 @@ final class AppModel {
         clearSession()
     }
 
+    /// Deletes the account for good (#135; App Store guideline 5.1.1(v)),
+    /// then signs out. Returns whether it was deleted.
+    func deleteAccount() async -> Bool {
+        guard let token else { return false }
+        do {
+            let _: AccountDeletion = try await api.delete("api/me/user", token: token, body: ConfirmDeletion())
+            clearSession()
+            return true
+        } catch {
+            handle(error)
+            return false
+        }
+    }
+
     private func clearSession() {
         Keychain.delete()
         ResponseCache.clear()
@@ -292,4 +306,13 @@ final class AuthPresenter: NSObject, ASWebAuthenticationPresentationContextProvi
             return windows.first(where: \.isKeyWindow) ?? windows.first ?? ASPresentationAnchor()
         }
     }
+}
+
+struct ConfirmDeletion: Encodable, Sendable {
+    var confirm = true
+}
+
+struct AccountDeletion: Decodable, Sendable {
+    let deletedWorkspaces: [String]
+    let leftWorkspaces: [String]
 }
