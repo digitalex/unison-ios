@@ -43,6 +43,10 @@ final class BacklogModel {
     }
 
     var filter = Filter.active
+    /// Only items assigned to you (#130).
+    var mine = false
+    /// Filters titles on the device (#130).
+    var search = ""
     private(set) var items: [BacklogItem] = []
     private(set) var people: [Int64: Participant] = [:]
     private(set) var loaded = false
@@ -91,6 +95,47 @@ final class BacklogModel {
         }
     }
 
+    /// The items shown: `items` narrowed by Mine and the search text.
+    func shown(_ me: Int64?) -> [BacklogItem] {
+        let q = search.trimmingCharacters(in: .whitespaces)
+        return items.filter { item in
+            (!mine || (me != nil && item.assigneeId == me))
+                && (q.isEmpty || item.title.localizedCaseInsensitiveContains(q) || "#\(item.id)" == q || "\(item.id)" == q)
+        }
+    }
+
+    /// Assigns an item to you (#130).
+    func take(_ app: AppModel, _ id: Int64) async {
+        await act(app, "backlog/\(id)/assign", AssignItem())
+    }
+
+    /// Marks an item done (#130).
+    func close(_ app: AppModel, _ id: Int64) async {
+        items.removeAll { $0.id == id }
+        await act(app, "backlog/\(id)/close", CloseItem())
+    }
+
+    /// Moves an open item within Up next. The order shows at once; the
+    /// server's 1-based position counts open items only.
+    func move(_ app: AppModel, open: [BacklogItem], from: IndexSet, to: Int) async {
+        var ordered = open
+        ordered.move(fromOffsets: from, toOffset: to)
+        guard let i = from.first, let at = ordered.firstIndex(where: { $0.id == open[i].id }) else { return }
+        let rest = items.filter { $0.status != "open" }
+        items = rest + ordered
+        await act(app, "backlog/\(open[i].id)/move", MoveItem(position: at + 1))
+    }
+
+    private func act(_ app: AppModel, _ path: String, _ body: some Encodable & Sendable) async {
+        guard let token = app.token, let ws = app.selected else { return }
+        do {
+            let _: BacklogItem = try await app.api.post("api/workspaces/\(ws.id)/\(path)", token: token, body: body)
+        } catch {
+            app.handle(error)
+        }
+        await load(app)
+    }
+
     /// Changes an item's title and details (#123). Returns the saved item.
     func update(_ app: AppModel, id: Int64, title: String, body: String) async -> BacklogItem? {
         guard let token = app.token, let ws = app.selected else { return nil }
@@ -106,6 +151,17 @@ final class BacklogModel {
     }
 }
 
+/// No assignee means the caller.
+struct AssignItem: Encodable, Sendable {}
+
+struct CloseItem: Encodable, Sendable {
+    var note = ""
+}
+
+struct MoveItem: Encodable, Sendable {
+    let position: Int
+}
+
 struct NewItem: Encodable, Sendable {
     let title: String
     let body: String
@@ -115,6 +171,9 @@ struct BacklogView: View {
     @Environment(AppModel.self) private var app
     @State private var backlog = BacklogModel()
     @State private var adding = false
+    @State private var editing: BacklogItem?
+
+    private var me: Int64? { app.participant?.id }
 
     var body: some View {
         @Bindable var backlog = backlog
@@ -126,18 +185,26 @@ struct BacklogView: View {
             .pickerStyle(.segmented)
             .listRowSeparator(.hidden)
 
-            if backlog.loaded && backlog.items.isEmpty {
-                ContentUnavailableView(backlog.filter == .done ? "Nothing done yet" : "The backlog is empty",
-                                       systemImage: "list.number")
-                    .listRowSeparator(.hidden)
+            let shown = backlog.shown(me)
+            if backlog.loaded && shown.isEmpty {
+                if !backlog.search.isEmpty {
+                    ContentUnavailableView.search(text: backlog.search)
+                        .listRowSeparator(.hidden)
+                } else {
+                    ContentUnavailableView(empty, systemImage: "list.number")
+                        .listRowSeparator(.hidden)
+                }
             }
             if backlog.filter == .done {
-                rows(backlog.items)
+                rows(shown)
             } else {
-                section("In progress", backlog.items.filter { $0.status == "assigned" })
-                section("Up next", backlog.items.filter { $0.status == "open" })
+                section("In progress", shown.filter { $0.status == "assigned" })
+                // Reordering only makes sense on the whole queue.
+                section("Up next", shown.filter { $0.status == "open" },
+                        movable: !backlog.mine && backlog.search.isEmpty)
             }
         }
+        .searchable(text: $backlog.search, prompt: "Search titles")
         .listStyle(.plain)
         .overlay { if !backlog.loaded { ProgressView() } }
         .refreshable { await backlog.load(app) }
@@ -145,6 +212,13 @@ struct BacklogView: View {
             ItemDetailView(itemID: id, backlog: backlog)
         }
         .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                Toggle(isOn: $backlog.mine) {
+                    Label("Mine", systemImage: backlog.mine ? "person.fill" : "person")
+                }
+                .toggleStyle(.button)
+                .disabled(me == nil)
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 Button("New item", systemImage: "plus") { adding = true }
             }
@@ -152,16 +226,26 @@ struct BacklogView: View {
         .sheet(isPresented: $adding) {
             ItemSheet(backlog: backlog)
         }
+        .sheet(item: $editing) { item in
+            ItemSheet(backlog: backlog, item: item)
+        }
         .task(id: "\(app.selectedID ?? "")-\(backlog.filter)-\(app.revision("backlog"))-\(app.revision("pr"))-\(app.revision("comment"))") {
             await backlog.load(app)
         }
     }
 
+    private var empty: String {
+        if backlog.mine { return backlog.filter == .done ? "Nothing of yours done yet" : "Nothing assigned to you" }
+        return backlog.filter == .done ? "Nothing done yet" : "The backlog is empty"
+    }
+
     @ViewBuilder
-    private func section(_ title: String, _ items: [BacklogItem]) -> some View {
+    private func section(_ title: String, _ items: [BacklogItem], movable: Bool = false) -> some View {
         if !items.isEmpty {
             Section {
-                rows(items)
+                rows(items).onMove(perform: movable ? { from, to in
+                    Task { await backlog.move(app, open: items, from: from, to: to) }
+                } : nil)
             } header: {
                 Text("\(title) · \(items.count)")
                     .font(.footnote.weight(.semibold))
@@ -170,12 +254,43 @@ struct BacklogView: View {
         }
     }
 
-    private func rows(_ items: [BacklogItem]) -> some View {
+    private func rows(_ items: [BacklogItem]) -> some DynamicViewContent {
         ForEach(items) { item in
             NavigationLink(value: item.id) {
                 BacklogRow(item: item, assignee: item.assigneeId.flatMap { backlog.people[$0] })
             }
+            .swipeActions(edge: .leading) {
+                if item.status != "done" && item.assigneeId != me {
+                    Button("Take it", systemImage: "hand.raised") {
+                        Task { await backlog.take(app, item.id) }
+                    }
+                    .tint(.blue)
+                }
+            }
+            .swipeActions(edge: .trailing) {
+                if item.status != "done" {
+                    Button("Done", systemImage: "checkmark") {
+                        Task { await backlog.close(app, item.id) }
+                    }
+                    .tint(.green)
+                }
+            }
+            .contextMenu {
+                if let ws = app.selected {
+                    Button("Copy link", systemImage: "link") {
+                        UIPasteboard.general.url = link(ws.id, item.id)
+                    }
+                }
+                Button("Edit", systemImage: "pencil") { editing = item }
+            }
         }
+    }
+
+    /// The item on the web: the backlog with ?item=N open.
+    private func link(_ ws: String, _ id: Int64) -> URL? {
+        var c = URLComponents(url: API.server.appending(path: "w/\(ws)"), resolvingAgainstBaseURL: false)
+        c?.queryItems = [URLQueryItem(name: "item", value: "\(id)")]
+        return c?.url
     }
 }
 
