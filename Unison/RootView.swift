@@ -73,11 +73,12 @@ struct MainView: View {
     /// Counts taps on the Chat tab; each one scrolls the chat to the end (#80).
     @State private var chatJump = ChatJump()
     @State private var backlogPath: [Int64] = MainView.initialItem
+    @State private var recurringPath: [Int64] = []
     @State private var settingsPath: [Int64] = []
     @State private var newWorkspace = false
     @State private var newWorkspaceName = ""
 
-    /// Debug builds can open on a tab with `UNISON_TAB` (chat, backlog, settings),
+    /// Debug builds can open on a tab with `UNISON_TAB` (chat, backlog, recurring, settings),
     /// and on a backlog item with `UNISON_ITEM`, for screenshots.
     private static var initialTab: String {
         #if DEBUG
@@ -117,6 +118,9 @@ struct MainView: View {
             .badge(actions.count)
             Tab("Backlog", systemImage: "list.number", value: "backlog") {
                 screen("Backlog", path: $backlogPath) { BacklogView() }
+            }
+            Tab("Recurring", systemImage: "repeat", value: "recurring") {
+                screen("Recurring", path: $recurringPath) { RecurringView() }
             }
             Tab("Settings", systemImage: "gearshape", value: "settings") {
                 screen("Settings", path: $settingsPath) { SettingsView() }
