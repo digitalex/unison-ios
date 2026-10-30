@@ -1,3 +1,4 @@
+import AuthenticationServices
 import SwiftUI
 
 struct RootView: View {
@@ -43,14 +44,24 @@ struct SignInView: View {
             if model.signingIn {
                 ProgressView()
             } else {
-                Button {
-                    model.signIn()
-                } label: {
-                    Text("Sign in with GitHub")
-                        .frame(maxWidth: .infinity)
+                VStack(spacing: 12) {
+                    SignInWithAppleButton(.signIn) { request in
+                        request.requestedScopes = [.fullName, .email]
+                    } onCompletion: { result in
+                        model.signInWithApple(result)
+                    }
+                    .signInWithAppleButtonStyle(.white)
+                    .frame(height: 55)
+                    .clipShape(.capsule)
+                    Button {
+                        model.signIn()
+                    } label: {
+                        Text("Sign in with GitHub")
+                            .frame(maxWidth: .infinity, minHeight: 26)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
                 }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
             }
         }
         .padding(24)
