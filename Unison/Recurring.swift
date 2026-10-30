@@ -84,6 +84,23 @@ final class RecurringModel {
         }
     }
 
+    struct RunResult: Decodable, Sendable {
+        let item: BacklogItem
+        let added: Bool
+    }
+
+    /// Runs a schedule now, as if it were due (#116): a new item at the top of
+    /// the backlog, or a note on its still-open previous run.
+    func run(_ app: AppModel, _ id: Int64) async -> RunResult? {
+        guard let token = app.token, let path = path(app) else { return nil }
+        do {
+            return try await app.api.post("\(path)/\(id)/run", token: token)
+        } catch {
+            app.handle(error)
+            return nil
+        }
+    }
+
     func remove(_ app: AppModel, _ id: Int64) async {
         guard let token = app.token, let path = path(app) else { return }
         schedules.removeAll { $0.id == id }
@@ -149,6 +166,8 @@ struct ScheduleSheet: View {
     @State private var weekly = false
     @State private var weekday = Weekday.mon
     @State private var saving = false
+    @State private var running = false
+    @State private var ran: RecurringModel.RunResult?
     @FocusState private var titleFocused: Bool
 
     private var trimmedTitle: String { title.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -175,6 +194,26 @@ struct ScheduleSheet: View {
                     }
                 } footer: {
                     Text("Each run is added to the top of the backlog at midnight, server time.")
+                }
+                if let schedule {
+                    Section {
+                        Button("Run now", systemImage: "play.fill") {
+                            running = true
+                            Task {
+                                ran = await recurring.run(app, schedule.id)
+                                running = false
+                            }
+                        }
+                        .disabled(running)
+                    } footer: {
+                        if let ran {
+                            Text(ran.added
+                                 ? "Added #\(ran.item.id) to the top of the backlog."
+                                 : "#\(ran.item.id) is still open, so no new item was added; the run is noted on it.")
+                        } else {
+                            Text("Does what a due run does. The next scheduled run stays.")
+                        }
+                    }
                 }
             }
             .navigationTitle(schedule == nil ? "New recurring task" : "Recurring task")
@@ -209,6 +248,7 @@ struct ScheduleSheet: View {
                 }
             }
         }
-        .presentationDetents([.medium, .large])
+        // Full height for an existing schedule, so Run now is in view.
+        .presentationDetents(schedule == nil ? [.medium, .large] : [.large])
     }
 }
