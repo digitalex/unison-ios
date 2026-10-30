@@ -115,6 +115,28 @@ final class AppModel {
         }
     }
 
+    /// Signs in to the App Review demo account with the access code from
+    /// the review notes (#139). The server answers 404 unless it's enabled.
+    func signInForReview(code: String) {
+        signInTask?.cancel()
+        error = nil
+        signingIn = true
+        signInTask = Task {
+            defer { signingIn = false }
+            do {
+                let res: AppToken = try await api.post("api/auth/review", token: nil,
+                                                       body: ReviewSignIn(code: code, label: "iPhone (App Review)"))
+                Keychain.save(res.token)
+                token = res.token
+            } catch let e as APIError where e.status == 401 {
+                self.error = "That access code isn't right."
+            } catch is CancellationError {
+            } catch {
+                self.error = error.localizedDescription
+            }
+        }
+    }
+
     /// Runs the browser sheet until the server redirects to `unison://…`.
     private func authenticate(_ url: URL) async throws -> URL {
         try await withCheckedThrowingContinuation { continuation in
