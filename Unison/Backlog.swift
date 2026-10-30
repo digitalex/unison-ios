@@ -141,10 +141,16 @@ final class BacklogModel {
         }
     }
 
-    /// Marks an item done (#130).
-    func close(_ app: AppModel, _ id: Int64) async {
+    /// Marks an item done (#130), with an optional note (#149).
+    func close(_ app: AppModel, _ id: Int64, note: String = "") async {
         items.removeAll { $0.id == id }
-        await act(app, "backlog/\(id)/close", CloseItem())
+        await act(app, "backlog/\(id)/close", CloseItem(note: note))
+    }
+
+    /// Reopens a done item (#149).
+    func reopen(_ app: AppModel, _ id: Int64) async {
+        items.removeAll { $0.id == id }
+        await act(app, "backlog/\(id)/reopen", Empty())
     }
 
     /// Moves an open item within Up next. The order shows at once; the
@@ -307,7 +313,11 @@ struct BacklogView: View {
                 }
             }
             .swipeActions(edge: .trailing) {
-                if item.status != "done" {
+                if item.status == "done" {
+                    Button("Reopen", systemImage: "arrow.uturn.backward") {
+                        Task { await backlog.reopen(app, item.id) }
+                    }
+                } else {
                     Button("Done", systemImage: "checkmark") {
                         Task { await backlog.close(app, item.id) }
                     }
@@ -321,6 +331,9 @@ struct BacklogView: View {
                     }
                 }
                 Button("Edit", systemImage: "pencil") { editing = item }
+                if item.status != "done" {
+                    AssignMenu(item: item, backlog: backlog)
+                }
             }
         }
     }
@@ -420,6 +433,8 @@ struct ItemDetailView: View {
     @State private var item: BacklogItem?
     @State private var comments: [Comment] = []
     @State private var editing = false
+    @State private var closing = false
+    @State private var closeNote = ""
 
     var body: some View {
         List {
@@ -475,7 +490,7 @@ struct ItemDetailView: View {
         .toolbar {
             if item != nil {
                 ToolbarItem(placement: .primaryAction) {
-                    Button("Edit") { editing = true }
+                    if let item { actions(item) }
                 }
             }
         }
@@ -484,12 +499,49 @@ struct ItemDetailView: View {
                 ItemSheet(backlog: backlog, item: item) { self.item = $0 }
             }
         }
+        .alert("Close #\(itemID)", isPresented: $closing) {
+            TextField("Note (optional)", text: $closeNote)
+            Button("Cancel", role: .cancel) {}
+            Button("Close item") { act { await backlog.close(app, itemID, note: closeNote) } }
+        }
         .safeAreaInset(edge: .bottom) {
             if item != nil {
                 Composer(placeholder: "Add a comment") { await addComment($0) }
             }
         }
         .task(id: "\(app.revision("backlog"))-\(app.revision("pr"))-\(app.revision("comment"))") {
+            await load()
+        }
+    }
+
+    /// What you can do to the item (#149): the same as on the web.
+    private func actions(_ item: BacklogItem) -> some View {
+        let me = app.participant?.id
+        return Menu("Actions", systemImage: "ellipsis.circle") {
+            Button("Edit", systemImage: "pencil") { editing = true }
+            if item.status != "done" {
+                AssignMenu(item: item, backlog: backlog) { self.item = $0 }
+            }
+            if item.inProgress {
+                Button("Stop", systemImage: "pause") { act { await backlog.stop(app, itemID) } }
+            } else if item.status == "open" && (item.assigneeId == nil || item.assigneeId == me) {
+                Button("Start", systemImage: "play") { act { await backlog.start(app, itemID) } }
+            }
+            if item.status == "done" {
+                Button("Reopen", systemImage: "arrow.uturn.backward") { act { await backlog.reopen(app, itemID) } }
+            } else {
+                Button("Close", systemImage: "checkmark") {
+                    closeNote = ""
+                    closing = true
+                }
+            }
+        }
+    }
+
+    /// Runs an action on the item, then shows the result.
+    private func act(_ action: @escaping () async -> Void) {
+        Task {
+            await action()
             await load()
         }
     }
@@ -522,6 +574,31 @@ struct ItemDetailView: View {
         } catch {
             app.handle(error)
             return false
+        }
+    }
+}
+
+/// A submenu to assign an item to someone or to nobody (#149).
+struct AssignMenu: View {
+    @Environment(AppModel.self) private var app
+    let item: BacklogItem
+    let backlog: BacklogModel
+    /// Gets the item once it's saved.
+    var saved: (BacklogItem) -> Void = { _ in }
+
+    var body: some View {
+        Menu("Assign to", systemImage: "person") {
+            Picker("Assign to", selection: Binding(get: { item.assigneeId }, set: { to in
+                Task {
+                    if let it = await backlog.assign(app, item.id, to: to) { saved(it) }
+                }
+            })) {
+                Text("Unassigned").tag(Int64?.none)
+                ForEach(backlog.people.values.sorted { $0.name < $1.name }) { p in
+                    Text("\(p.emoji) \(p.name)").tag(Int64?.some(p.id))
+                }
+            }
+            .pickerStyle(.inline)
         }
     }
 }
