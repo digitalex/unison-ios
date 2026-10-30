@@ -113,7 +113,38 @@ final class RecurringModel {
     }
 }
 
-/// The schedules, in the Backlog tab's Recurring section.
+/// The Recurring tab (#121): the workspace's schedules.
+struct RecurringView: View {
+    @Environment(AppModel.self) private var app
+    @State private var recurring = RecurringModel()
+    @State private var adding = false
+    @State private var editing: Schedule?
+
+    var body: some View {
+        List {
+            RecurringList(recurring: recurring, editing: $editing)
+        }
+        .listStyle(.plain)
+        .overlay { if !recurring.loaded { ProgressView() } }
+        .refreshable { await recurring.load(app) }
+        .safeAreaInset(edge: .bottom) {
+            Button("New recurring task", systemImage: "plus") { adding = true }
+                .buttonStyle(.borderedProminent)
+                .padding(.bottom, 8)
+        }
+        .sheet(isPresented: $adding) {
+            ScheduleSheet(recurring: recurring, schedule: nil)
+        }
+        .sheet(item: $editing) { sc in
+            ScheduleSheet(recurring: recurring, schedule: sc)
+        }
+        .task(id: "\(app.selectedID ?? "")-\(app.revision("schedule"))") {
+            await recurring.load(app)
+        }
+    }
+}
+
+/// The schedules, in the Recurring tab.
 struct RecurringList: View {
     @Environment(AppModel.self) private var app
     let recurring: RecurringModel
