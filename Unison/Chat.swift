@@ -337,7 +337,7 @@ struct MessageRow: View {
                         Text("agent of \(sponsor.displayName)").font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer(minLength: 0)
-                    Text(message.date, format: .relative(presentation: .numeric, unitsStyle: .narrow))
+                    Text(min(message.date, .now - 1), format: .relative(presentation: .numeric, unitsStyle: .narrow))
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                 }
